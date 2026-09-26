@@ -110,8 +110,9 @@ for s:directory in [s:backupdir, s:swapdir]
     call mkdir(s:directory, 'p', 0700)
   endif
 endfor
-let &backupdir = escape(s:backupdir, ' ,') . '//'
-let &directory = escape(s:swapdir, ' ,') . '//'
+" Direct option assignment preserves spaces; only list-separating commas escape.
+let &backupdir = escape(s:backupdir, ',') . '//'
+let &directory = escape(s:swapdir, ',') . '//'
 set modelines=5
 
 nnoremap <left> <nop>
@@ -163,7 +164,7 @@ noremap <Leader>yr :YcmCompleter GoToReferences<CR>
 noremap <C-I> :YcmCompleter GoToImplementation<CR>
 noremap <C-]> :YcmCompleter GoToDefinitionElseDeclaration<CR>
 noremap <C-F> :FormatCode<CR>
-inoremap <C-F> :FormatCode<CR>
+inoremap <C-F> <C-O>:FormatCode<CR>
 vnoremap <C-F> :FormatLines<CR>
 noremap <Leader>yR :YcmCompleter RefactorRename<cr>
 noremap <Leader>yf :YcmCompleter FixIt<CR>

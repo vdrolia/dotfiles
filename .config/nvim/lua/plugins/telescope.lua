@@ -79,7 +79,7 @@ return {
         },
         file_ignore_patterns = {
           "node_modules",
-          ".*.d.ts",
+          "%.d%.ts$",
           "[.][/]dist.*",
         },
         mappings = {

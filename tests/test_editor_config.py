@@ -13,6 +13,80 @@ REPO = Path(__file__).resolve().parents[1]
 
 class EditorConfigTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("vim"), "Vim is unavailable")
+    def test_backup_and_swap_paths_with_spaces_and_commas(self):
+        for leaf in ["with spaces", "with,commas", "with spaces,and commas"]:
+            with self.subTest(leaf=leaf), tempfile.TemporaryDirectory() as directory:
+                temp = Path(directory)
+                backup = temp / ("backup-" + leaf)
+                swap = temp / ("swap-" + leaf)
+                local = temp / "local.vim"
+                local.write_text(
+                    "let g:dotfiles_enable_plugins = 0\n"
+                    "let g:dotfiles_fzf_path = ''\n"
+                    "let g:dotfiles_backupdir = " + repr(str(backup)) + "\n"
+                    "let g:dotfiles_swapdir = " + repr(str(swap)) + "\n"
+                )
+                source = temp / "sample.txt"
+                source.write_text("original content\n")
+                output = temp / "result.json"
+                script = temp / "verify.vim"
+                script.write_text(
+                    # Vim normally skips backups for temporary input files.
+                    "set backupskip= updatecount=1 swapfile\n"
+                    "execute 'edit ' . fnameescape(" + repr(str(source)) + ")\n"
+                    "let v:errmsg = ''\n"
+                    "call setline(1, 'saved content')\nwrite\n"
+                    "call setline(1, 'unsaved content')\npreserve\n"
+                    "let s:swap = swapname('%')\n"
+                    "call writefile([json_encode({'error': v:errmsg, 'swap': s:swap, "
+                    "'swap_exists': filereadable(s:swap)})], " + repr(str(output)) + ")\nqa!\n"
+                )
+                result = subprocess.run([shutil.which("vim"), "-N", "-i", "NONE", "-es",
+                                         "--cmd", "set runtimepath=$VIMRUNTIME",
+                                         "-u", str(REPO / ".vimrc"), "-S", str(script)],
+                                        env=dict(os.environ, DOTFILES_VIM_LOCAL=str(local)),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                state = json.loads(output.read_text())
+                self.assertEqual(state["error"], "")
+                self.assertEqual(source.read_text(), "saved content\n")
+                backups = list(backup.iterdir())
+                self.assertEqual(len(backups), 1)
+                self.assertEqual(backups[0].read_text(), "original content\n")
+                self.assertEqual(state["swap_exists"], 1)
+                self.assertEqual(Path(state["swap"]).parent.resolve(), swap.resolve())
+
+    @unittest.skipUnless(shutil.which("vim"), "Vim is unavailable")
+    def test_insert_format_mapping_invokes_command_and_resumes_typing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            local = temp / "local.vim"
+            local.write_text(
+                "let g:dotfiles_enable_plugins = 0\n"
+                "let g:dotfiles_fzf_path = ''\n"
+                "let g:dotfiles_backupdir = " + repr(str(temp / "backup")) + "\n"
+                "let g:dotfiles_swapdir = " + repr(str(temp / "swap")) + "\n"
+            )
+            output = temp / "result.json"
+            script = temp / "verify.vim"
+            script.write_text(
+                "let g:format_called = 0\n"
+                "command! FormatCode let g:format_called += 1\n"
+                "call feedkeys(\"iabc\\<C-F>def\\<Esc>\", 'xt')\n"
+                "call writefile([json_encode({'calls': g:format_called, 'lines': getline(1, '$')})], "
+                + repr(str(output)) + ")\nqa!\n"
+            )
+            result = subprocess.run([shutil.which("vim"), "-N", "-n", "-i", "NONE", "-es",
+                                     "--cmd", "set runtimepath=$VIMRUNTIME",
+                                     "-u", str(REPO / ".vimrc"), "-S", str(script)],
+                                    env=dict(os.environ, DOTFILES_VIM_LOCAL=str(local)),
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            state = json.loads(output.read_text())
+            self.assertEqual(state["calls"], 1)
+            self.assertEqual(state["lines"], ["abcdef"])
+
+    @unittest.skipUnless(shutil.which("vim"), "Vim is unavailable")
     def test_unnamed_startup_uses_native_filetype_detection(self):
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)

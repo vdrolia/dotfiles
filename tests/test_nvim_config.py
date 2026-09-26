@@ -181,12 +181,68 @@ require('config.machine').get().tools.debugpy_python = '/does/not/exist'
 assert(python.debugpy() == nil)
 """)
 
-    @unittest.skipUnless(os.environ.get("DOTFILES_NVIM_TEST_PLUGIN_ROOT"), "Isolated plugin fixture not supplied")
-    def test_pinned_plugins_start_and_load_representative_features(self):
+    def use_plugin_fixture(self):
         plugin_root = Path(os.environ["DOTFILES_NVIM_TEST_PLUGIN_ROOT"]).resolve()
         lazy = self.root / "data" / "nvim" / "lazy"
         lazy.parent.mkdir(parents=True)
         lazy.symlink_to(plugin_root, target_is_directory=True)
+
+    @unittest.skipUnless(os.environ.get("DOTFILES_NVIM_TEST_PLUGIN_ROOT"), "Isolated plugin fixture not supplied")
+    def test_pinned_eslint_save_regression(self):
+        self.use_plugin_fixture()
+        self.lua("""
+local buffer = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_set_current_buf(buffer)
+local requests, warnings = {}, {}
+local client = {
+  name = 'eslint',
+  supports_method = function() return false end,
+  request_sync = function(_, method, params, _, bufnr)
+    table.insert(requests, {method=method, params=params, buffer=bufnr})
+  end,
+}
+-- Register the real command from the pinned native Neovim LSP definition.
+vim.lsp.config.eslint.on_attach(client, buffer)
+assert(vim.fn.exists(':LspEslintFixAll') == 2)
+local original_get_client = vim.lsp.get_client_by_id
+vim.lsp.get_client_by_id = function() return client end
+vim.api.nvim_exec_autocmds('LspAttach', {
+  buffer=buffer, group='lsp-attach', data={client_id=12345},
+})
+vim.lsp.get_client_by_id = original_get_client
+local original_notify = vim.notify
+vim.notify = function(message) table.insert(warnings, message) end
+vim.api.nvim_exec_autocmds('BufWritePre', {buffer=buffer})
+vim.notify = original_notify
+assert(#requests == 1, 'Save did not invoke ESLint: ' .. vim.inspect(warnings))
+assert(requests[1].method == 'workspace/executeCommand')
+assert(requests[1].params.command == 'eslint.applyAllFixes')
+assert(requests[1].params.arguments[1].uri == vim.uri_from_bufnr(buffer))
+assert(requests[1].buffer == buffer)
+assert(#warnings == 0, vim.inspect(warnings))
+""", startup=True)
+
+    @unittest.skipUnless(os.environ.get("DOTFILES_NVIM_TEST_PLUGIN_ROOT"), "Isolated plugin fixture not supplied")
+    def test_pinned_telescope_declaration_filter_regression(self):
+        self.use_plugin_fixture()
+        self.lua("""
+require('lazy').load({plugins={'telescope.nvim'}})
+local picker = require('telescope.pickers').new({}, {
+  finder=require('telescope.finders').new_table({results={}}),
+})
+local retained = {}
+picker.sorter.score = function(_, _, entry) table.insert(retained, entry.value) end
+-- Exercise Telescope's result processor with the configured ignore patterns.
+local process = picker:get_result_processor(picker._find_id, '', function() end)
+for _, filename in ipairs({'find.ts', 'build.ts', 'types.d.ts', 'src/types.d.ts', 'types.d.ts.bak', 'index.ts'}) do
+  process({value=filename, filename=filename})
+end
+assert(vim.deep_equal(retained, {'find.ts', 'build.ts', 'types.d.ts.bak', 'index.ts'}), vim.inspect(retained))
+""", startup=True)
+
+    @unittest.skipUnless(os.environ.get("DOTFILES_NVIM_TEST_PLUGIN_ROOT"), "Isolated plugin fixture not supplied")
+    def test_pinned_plugins_start_and_load_representative_features(self):
+        self.use_plugin_fixture()
         python = self.root / ".venv" / "bin" / "python"
         python.parent.mkdir(parents=True)
         python.write_text("#!/bin/sh\nexit 0\n")

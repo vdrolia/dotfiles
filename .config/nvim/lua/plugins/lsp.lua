@@ -105,9 +105,9 @@ return {
 						vim.api.nvim_create_autocmd("BufWritePre", {
 							buffer = event.buf,
 							callback = function()
-								local ok_fix, err = pcall(vim.cmd, "EslintFixAll")
+                                local ok_fix, err = pcall(vim.cmd, "LspEslintFixAll")
 								if not ok_fix then
-									vim.notify("EslintFixAll failed: " .. tostring(err), vim.log.levels.WARN)
+                                    vim.notify("LspEslintFixAll failed: " .. tostring(err), vim.log.levels.WARN)
 								end
 							end,
 						})
