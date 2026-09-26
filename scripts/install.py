@@ -116,7 +116,9 @@ class Installer:
         self.flipper_data = None
         if args.render_flipper or args.flipper_overrides:
             self.flipper_data = self.prepare_flipper()
-        self.hook_entries = self.prepare_hooks() if args.install_hooks else []
+        self.auto_sync = True if args.enable_auto_sync else False if args.disable_auto_sync else None
+        self.auto_sync_before = self.read_auto_sync() if self.auto_sync is not None else None
+        self.hook_entries = self.prepare_hooks() if args.install_hooks or args.enable_auto_sync else []
 
     def backup(self, destination):
         if not destination.exists() and not destination.is_symlink():
@@ -213,12 +215,35 @@ class Installer:
         if not directory.is_absolute():
             directory = REPO / directory
         entries = []
-        for name in ("pre-commit", "pre-push"):
+        names = ["pre-commit", "pre-push"]
+        if self.args.enable_auto_sync:
+            names.append("post-commit")
+        for name in names:
             target = directory / name
             if target.is_dir():
                 raise ValueError("Refusing to replace a hooks directory")
             entries.append((target, (REPO / ".githooks" / name).read_bytes()))
         return entries
+
+    def read_auto_sync(self):
+        result = subprocess.run(["git", "-C", str(REPO), "config", "--local", "--get-all", "dotfiles.autoSync"],
+                                capture_output=True, text=True, env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
+        if result.returncode not in (0, 1):
+            raise ValueError("Cannot read clone-local auto-sync configuration; no files changed")
+        return result.stdout.splitlines()
+
+    def configure_auto_sync(self):
+        if self.auto_sync is None:
+            return
+        value = "true" if self.auto_sync else "false"
+        if self.auto_sync_before == [value]:
+            print("Keep clone-local auto-sync", value)
+            return
+        print("Set clone-local auto-sync", value)
+        if not self.args.dry_run:
+            subprocess.run(["git", "-C", str(REPO), "config", "--local", "--replace-all",
+                            "dotfiles.autoSync", value], check=True,
+                           env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
 
     def run(self):
         for kind, source, destination in self.entries:
@@ -230,6 +255,8 @@ class Installer:
             self.write_file(self.config / "flipper/settings.json", self.flipper_data)
         for target, data in self.hook_entries:
             self.write_file(target, data, 0o755)
+        # Enable only after every required hook has been installed successfully.
+        self.configure_auto_sync()
         if self.backup_dir:
             print("Private backups:", self.backup_dir)
         if self.args.dry_run:
@@ -251,6 +278,11 @@ def main():
     parser.add_argument("--render-flipper", action="store_true", help="merge defaults, existing local settings and private overrides")
     parser.add_argument("--flipper-overrides", help="private JSON override object; also enables rendering")
     parser.add_argument("--install-hooks", action="store_true", help="install optional pre-commit/pre-push checks with backups")
+    sync = parser.add_mutually_exclusive_group()
+    sync.add_argument("--enable-auto-sync", action="store_true",
+                      help="install privacy hooks and opt this clone into pushing deliberate commits")
+    sync.add_argument("--disable-auto-sync", action="store_true",
+                      help="turn off this clone's auto-push setting without removing hooks")
     args = parser.parse_args()
     try:
         Installer(args).run()

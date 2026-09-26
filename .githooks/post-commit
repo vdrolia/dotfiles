@@ -1,0 +1,53 @@
+#!/bin/sh
+# Opt-in per clone. Never stage, commit, pull, or force a push.
+enabled=$(git config --local --bool --get dotfiles.autoSync 2>/dev/null) || exit 0
+[ "$enabled" = true ] || exit 0
+
+saved() {
+    printf 'dotfiles auto-sync: %s Your commit is saved locally.\n' "$1" >&2
+    exit 0
+}
+
+repo=$(git rev-parse --show-toplevel 2>/dev/null) || saved 'Could not locate the checkout; skipped.'
+cd "$repo" || saved 'Could not enter the checkout; skipped.'
+local_ref=$(git symbolic-ref -q HEAD) || saved 'Detached HEAD; skipped.'
+case "$local_ref" in
+    refs/heads/*) ;;
+    *) saved 'HEAD is not a local branch; skipped.' ;;
+esac
+branch=${local_ref#refs/heads/}
+remote=$(git config --local --get-all "branch.$branch.remote") || saved 'No upstream remote; skipped.'
+remote_ref=$(git config --local --get-all "branch.$branch.merge") || saved 'No upstream branch; skipped.'
+case "$remote" in
+    ''|.) saved 'No external upstream remote; skipped.' ;;
+esac
+case "$remote_ref" in
+    refs/heads/*) ;;
+    *) saved 'Upstream is not a branch; skipped.' ;;
+esac
+git check-ref-format "refs/remotes/$remote/check" >/dev/null 2>&1 || saved 'Invalid upstream remote; skipped.'
+git check-ref-format "$remote_ref" >/dev/null 2>&1 || saved 'Invalid upstream branch; skipped.'
+push_urls=$(git remote get-url --push --all -- "$remote" 2>/dev/null) || saved 'Upstream remote is unavailable; skipped.'
+case "$push_urls" in
+    ''|*'
+'*) saved 'Upstream must have exactly one push destination; skipped.' ;;
+esac
+tip=$(git --no-lazy-fetch rev-parse --verify "${local_ref}^{commit}" 2>/dev/null) || saved 'Could not read the committed revision; skipped.'
+zero=$(printf '%s' "$tip" | tr '0123456789abcdef' '0')
+
+# Check all reachable history before contacting a remote. Tracking refs can be
+# stale; a zero remote OID deliberately asks the checker to inspect everything.
+if ! printf '%s %s %s %s\n' "$local_ref" "$tip" "$remote_ref" "$zero" |
+    python3 "$repo/scripts/check-public.py" --mode pre-push --remote "$remote"; then
+    saved 'Privacy check failed; nothing was pushed.'
+fi
+
+# Pin the scanned commit and destination. Ignore broad push defaults, tag and
+# submodule settings, and mirror configuration. The pre-push hook still runs.
+# Suppress transport output because it can include credentials in remote URLs.
+if ! GIT_TERMINAL_PROMPT=0 git -c "remote.$remote.mirror=false" push \
+    --no-force --no-follow-tags --recurse-submodules=no -- \
+    "$remote" "$tip:$remote_ref" >/dev/null 2>&1; then
+    saved 'Auto-push failed; check the upstream and retry a normal push when ready.'
+fi
+printf 'dotfiles auto-sync: committed revision pushed to its upstream branch.\n'

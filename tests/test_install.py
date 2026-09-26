@@ -209,6 +209,7 @@ class InstallerTests(unittest.TestCase):
         return type("Args", (), dict(target_dir=str(self.target), config_dir=None,
                                      local_dir=None, render_flipper=False,
                                      flipper_overrides=None, install_hooks=False,
+                                     enable_auto_sync=False, disable_auto_sync=False,
                                      dry_run=True))()
 
     def test_relative_xdg_directories_are_rejected_when_used(self):
@@ -241,9 +242,97 @@ class InstallerTests(unittest.TestCase):
         subprocess.run(["git", "init", "--quiet", str(self.repo)], env=self.env, check=True)
         source = self.repo / ".githooks"
         source.mkdir()
-        for name in ("pre-commit", "pre-push"):
+        for name in ("pre-commit", "pre-push", "post-commit"):
             (source / name).write_text("#!/bin/sh\nexit 0\n")
         return self.repo / ".git/hooks"
+
+    def local_auto_sync(self):
+        return subprocess.run(["git", "-C", str(self.repo), "config", "--local",
+                               "--get-all", "dotfiles.autoSync"], env=self.env,
+                              capture_output=True, text=True)
+
+    def test_normal_install_and_privacy_hooks_do_not_enable_auto_sync(self):
+        hooks = self.prepare_git_hooks()
+        before = (self.repo / ".git/config").read_bytes()
+        self.run_install()
+        self.assertFalse((hooks / "post-commit").exists())
+        self.assertFalse((hooks / "pre-push").exists())
+        self.assertEqual(self.local_auto_sync().returncode, 1)
+        self.run_install("--install-hooks")
+        self.assertTrue((hooks / "pre-push").is_file())
+        self.assertFalse((hooks / "post-commit").exists())
+        self.assertEqual((self.repo / ".git/config").read_bytes(), before)
+
+    def test_explicit_auto_sync_installs_all_hooks_and_backs_up_old_post_commit(self):
+        hooks = self.prepare_git_hooks()
+        previous = hooks / "post-commit"
+        previous.write_text("#!/bin/sh\nprintf old-post-commit\n")
+        previous.chmod(0o755)
+        self.run_install("--enable-auto-sync")
+        self.assertEqual(self.local_auto_sync().stdout, "true\n")
+        for name in ("pre-commit", "pre-push", "post-commit"):
+            self.assertEqual((hooks / name).read_bytes(), (self.repo / ".githooks" / name).read_bytes())
+            self.assertEqual((hooks / name).stat().st_mode & 0o777, 0o755)
+        sessions = list((self.target / ".local/state/dotfiles/backups").iterdir())
+        self.assertEqual(len(sessions), 1)
+        records = json.loads((sessions[0] / "manifest.json").read_text())
+        saved = [record for record in records if Path(record["destination"]).resolve() == previous.resolve()]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual((sessions[0] / saved[0]["contents"]).read_text(),
+                         "#!/bin/sh\nprintf old-post-commit\n")
+        config = self.repo / ".git/config"
+        before = (previous.stat().st_ino, config.stat().st_mtime_ns)
+        self.run_install("--enable-auto-sync")
+        self.assertEqual(before, (previous.stat().st_ino, config.stat().st_mtime_ns))
+        self.assertEqual(len(list(sessions[0].parent.iterdir())), 1)
+        self.run_install()
+        self.assertEqual(self.local_auto_sync().stdout, "true\n")
+
+    def test_disable_auto_sync_preserves_hooks_even_with_custom_hooks_path(self):
+        hooks = self.prepare_git_hooks()
+        self.run_install("--enable-auto-sync")
+        custom = self.base / "custom hooks"
+        custom.mkdir()
+        (custom / "post-commit").write_text("#!/bin/sh\nprintf unrelated-hook\n")
+        subprocess.run(["git", "-C", str(self.repo), "config", "core.hooksPath", str(custom)],
+                       env=self.env, check=True)
+        before = {str(p): p.read_bytes() for directory in (hooks, custom)
+                  for p in directory.iterdir() if p.is_file()}
+        self.run_install("--disable-auto-sync")
+        self.assertEqual(self.local_auto_sync().stdout, "false\n")
+        after = {str(p): p.read_bytes() for directory in (hooks, custom)
+                 for p in directory.iterdir() if p.is_file()}
+        self.assertEqual(before, after)
+        config = self.repo / ".git/config"
+        mtime = config.stat().st_mtime_ns
+        self.run_install("--disable-auto-sync")
+        self.assertEqual(mtime, config.stat().st_mtime_ns)
+
+    def test_auto_sync_dry_run_never_changes_hooks_config_or_targets(self):
+        hooks = self.prepare_git_hooks()
+        before = {p.name: p.read_bytes() for p in hooks.iterdir() if p.is_file()}
+        config_before = (self.repo / ".git/config").read_bytes()
+        for option in ("--enable-auto-sync", "--disable-auto-sync"):
+            with self.subTest(option=option):
+                self.run_install(option, "--dry-run")
+                self.assertEqual(config_before, (self.repo / ".git/config").read_bytes())
+                self.assertEqual(before, {p.name: p.read_bytes() for p in hooks.iterdir() if p.is_file()})
+                self.assertFalse(self.target.exists())
+
+    def test_auto_sync_conflicting_flags_fail_before_any_writes(self):
+        self.prepare_git_hooks()
+        before = (self.repo / ".git/config").read_bytes()
+        self.run_install("--enable-auto-sync", "--disable-auto-sync", success=False)
+        self.assertFalse(self.target.exists())
+        self.assertEqual(before, (self.repo / ".git/config").read_bytes())
+
+    def test_auto_sync_hook_preflight_failure_cannot_enable_or_partially_install(self):
+        hooks = self.prepare_git_hooks()
+        (hooks / "post-commit").mkdir()
+        self.run_install("--enable-auto-sync", success=False)
+        self.assertEqual(self.local_auto_sync().returncode, 1)
+        self.assertFalse((hooks / "pre-push").exists())
+        self.assertFalse(self.target.exists())
 
     def test_optional_hooks_back_up_previous_content_and_are_idempotent(self):
         hooks = self.prepare_git_hooks()
@@ -269,9 +358,13 @@ class InstallerTests(unittest.TestCase):
         self.prepare_git_hooks()
         subprocess.run(["git", "-C", str(self.repo), "config", "core.hooksPath", "custom-hooks"],
                        env=self.env, check=True)
-        result = self.run_install("--install-hooks", success=False)
-        self.assertIn("core.hooksPath", result.stderr)
-        self.assertFalse(self.target.exists())
+        before = (self.repo / ".git/config").read_bytes()
+        for option in ("--install-hooks", "--enable-auto-sync"):
+            with self.subTest(option=option):
+                result = self.run_install(option, success=False)
+                self.assertIn("core.hooksPath", result.stderr)
+                self.assertFalse(self.target.exists())
+                self.assertEqual(before, (self.repo / ".git/config").read_bytes())
 
     def test_dry_run_hooks_and_rendering_create_nothing(self):
         hooks = self.prepare_git_hooks()

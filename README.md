@@ -15,6 +15,10 @@ native Windows installation is unsupported. Install applications separately.
 ./install.sh
 ```
 
+Automatic pushes are disabled on new clones, including work machines. Normal
+installation and `--install-hooks` do not enable them. Reinstalling preserves a
+clone's existing explicit choice.
+
 Only `install-manifest.json` entries are installed. Shared configuration files
 become symlinks. Tool versions, htop settings, and Flipper settings become
 writable local copies seeded from `templates/`. Existing local contents are
@@ -180,14 +184,52 @@ Install optional Git hooks explicitly, with backups of replaced hooks:
 Custom `core.hooksPath` requires explicit integration with existing hooks.
 Pre-commit checks the exact staged snapshot. Pre-push checks outgoing commit
 trees, intermediate commits, published ref names, and tag/commit metadata.
-New remote refs scan their full reachable history. Hooks never initiate commits,
-pushes, scheduled synchronization, or network requests. They are local safeguards
-and can be bypassed, so review publication separately.
+New remote refs scan their full reachable history. These check-only hooks never
+initiate commits, pushes, scheduled synchronization, or network requests. They
+are local safeguards and can be bypassed, so review publication separately.
 
 Cleaning current files does not sanitize history, hosted refs, pull requests,
 or commit metadata. Use a reviewed clean export and newly initialized repository
 when historical data must remain private. Do not change an old private repo's
 visibility based only on a current-file scan.
+
+## Optional automatic pushes
+
+On a trusted machine, explicitly opt this clone into pushing commits you create:
+
+```sh
+./install.sh --enable-auto-sync --dry-run
+./install.sh --enable-auto-sync
+```
+
+This installs the privacy pre-commit/pre-push hooks and a post-commit hook,
+backing up replaced hooks, then sets clone-local `dotfiles.autoSync=true`.
+An existing custom `core.hooksPath` requires manual integration. Dry runs change
+neither hooks nor Git configuration. Hooks and the opt-in setting are not
+inherited by new clones; a global setting cannot enable this feature.
+
+After a deliberate commit, the hook requires an attached branch with a configured
+upstream and pins its current commit. It scans that commit's full reachable history
+before any network request, then attempts a normal push of that exact commit to
+the upstream branch. It never stages files, creates commits, pulls, force-pushes,
+or pushes tags or submodules.
+A blocked or failed push leaves the commit saved locally and prints a warning.
+Set the desired upstream with a deliberate initial push before relying on this
+feature. Its remote must have exactly one push destination. The privacy checker
+and Gitleaks must be installed and available.
+
+Turn automatic pushes off for this clone with:
+
+```sh
+./install.sh --disable-auto-sync --dry-run
+./install.sh --disable-auto-sync
+```
+
+Disabling sets clone-local `dotfiles.autoSync=false` and preserves existing hooks,
+including unrelated custom hooks. GitHub access controls and branch/tag rules
+enforce publication permissions; keep write access limited to the repository
+owner. Local hooks do not grant or enforce remote permissions. Public access lets
+others clone, fork, and use these dotfiles without granting push access.
 
 Run `python3 -B -m unittest discover -s tests -v` for isolated tests.
 See `tests/README.md` for integration-test requirements.
