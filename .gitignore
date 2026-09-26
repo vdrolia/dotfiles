@@ -14,6 +14,7 @@
 /.config/nvim/local.lua
 /.config/nvim/lua/config/local.lua
 **/settings.local.json
+**/public-identities.json
 .env
 .env.*
 !.env.example

@@ -152,6 +152,24 @@ When `DOTFILES_PRIVACY_DENYLIST` is unset, an existing `privacy-denylist.txt` in
 `${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles`. Its resolved path must be outside the
 checkout. An explicitly configured missing file blocks publication.
 
+To deliberately attribute commits to a public account, create a private
+`public-identities.json` beside the denylist, or select an external file with
+`DOTFILES_PUBLIC_IDENTITIES`. Its schema is an array of exact name/email pairs:
+
+```json
+[{"name": "Your approved public name", "email": "public@example.invalid"}]
+```
+
+Use the exact identity you intend to publish. A GitHub account's verified email
+or GitHub-provided noreply address can link commits to that account; approving
+it intentionally permits that public association. Approval applies only to
+structured author/committer identity fields in actual commit objects. File
+contents, commit messages, ref names, taggers, and other metadata remain checked
+against the full privacy rules. Gitleaks always scans the original bytes.
+Without a policy, checks stay strict. Malformed or explicitly missing policies,
+and policies resolving inside the checkout, block publication. Keep the policy
+private; it is also rejected if force-added to Git.
+
 Install optional Git hooks explicitly, with backups of replaced hooks:
 
 ```sh

@@ -1,4 +1,5 @@
 """Privacy gates use isolated repositories and a scanner double, never home files."""
+import json
 import os
 from pathlib import Path
 import shutil
@@ -38,6 +39,7 @@ class PublicCheckTests(unittest.TestCase):
                         GIT_COMMITTER_EMAIL="public" + "@" + "example.invalid",
                         DOTFILES_LOCAL_DIR=str(self.root / "private-settings"))
         self.env.pop("DOTFILES_PRIVACY_DENYLIST", None)
+        self.env.pop("DOTFILES_PUBLIC_IDENTITIES", None)
         self.git("init", "-q")
         self.git("config", "user.name", "Public Contributor")
         self.git("config", "user.email", "public" + "@" + "example.invalid")
@@ -58,6 +60,122 @@ class PublicCheckTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(data)
         return path
+
+    def identity_fixture(self, name="Approved Contributor"):
+        identity = {"name": name, "email": "approved-user" + "@" + "users.noreply.github.com"}
+        for role in ["AUTHOR", "COMMITTER"]:
+            self.env["GIT_" + role + "_NAME"] = identity["name"]
+            self.env["GIT_" + role + "_EMAIL"] = identity["email"]
+        self.put("safe.txt", "ordinary configuration")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Initial")
+        denylist = self.root / "private-terms"
+        denylist.write_text(identity["name"] + "\napproved-user\n")
+        self.env["DOTFILES_PRIVACY_DENYLIST"] = str(denylist)
+        return identity
+
+    def write_identity_policy(self, identities):
+        path = self.root / "public-identities.json"
+        path.write_text(json.dumps(identities))
+        self.env["DOTFILES_PUBLIC_IDENTITIES"] = str(path)
+        return path
+
+    def new_ref_update(self, remote_ref="refs/heads/main", revision="HEAD"):
+        tip = self.git("rev-parse", revision)
+        return f"refs/heads/main {tip} {remote_ref} {'0' * len(tip)}\n"
+
+    def test_public_identity_requires_exact_opt_in(self):
+        identity = self.identity_fixture()
+        self.assertNotEqual(self.check("pre-push", self.new_ref_update()).returncode, 0)
+        self.write_identity_policy([identity])
+        self.assertEqual(self.check("pre-push", self.new_ref_update()).returncode, 0)
+        for other in [dict(identity, name="Another Contributor"),
+                      dict(identity, email="other-user" + "@" + "users.noreply.github.com")]:
+            with self.subTest(identity=other):
+                self.write_identity_policy([other])
+                self.assertNotEqual(self.check("pre-push", self.new_ref_update()).returncode, 0)
+
+    def test_public_identity_default_policy_discovery(self):
+        identity = self.identity_fixture()
+        for source in ["local", "xdg"]:
+            with self.subTest(source=source):
+                env = dict(self.env)
+                if source == "local":
+                    directory = Path(env["DOTFILES_LOCAL_DIR"])
+                else:
+                    env.pop("DOTFILES_LOCAL_DIR")
+                    env["XDG_CONFIG_HOME"] = str(self.root / "config-root")
+                    directory = Path(env["XDG_CONFIG_HOME"]) / "dotfiles"
+                directory.mkdir(parents=True)
+                (directory / "public-identities.json").write_text(json.dumps([identity]))
+                self.assertEqual(self.check("pre-push", self.new_ref_update(), env=env).returncode, 0)
+
+    def test_public_identity_does_not_exempt_spoofed_file_metadata(self):
+        identity = self.identity_fixture()
+        self.write_identity_policy([identity])
+        self.put("<commit metadata fake>", "author {name} <{email}> 1234567890 +0000\n\n".format(**identity))
+        self.git("add", ".")
+        self.git("commit", "-qm", "Add configuration")
+        for mode in ["working-tree", "staged", "pre-push"]:
+            with self.subTest(mode=mode):
+                result = self.check(mode, self.new_ref_update() if mode == "pre-push" else None)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("private denylist match", result.stdout)
+
+    def test_public_identity_does_not_exempt_messages_or_ref_names(self):
+        identity = self.identity_fixture()
+        self.write_identity_policy([identity])
+        self.assertNotEqual(self.check("pre-push", self.new_ref_update("refs/heads/approved-user")).returncode, 0)
+        message = "author {name} <{email}> 1234567890 +0000\n\nDetails".format(**identity)
+        self.git("commit", "--amend", "-qm", message)
+        self.assertNotEqual(self.check("pre-push", self.new_ref_update()).returncode, 0)
+
+    def test_public_identity_does_not_exempt_taggers(self):
+        identity = self.identity_fixture()
+        self.write_identity_policy([identity])
+        self.git("tag", "-a", "release", "-m", "Release")
+        self.assertNotEqual(self.check("pre-push", self.new_ref_update("refs/tags/release", "release")).returncode, 0)
+
+    def test_gitleaks_receives_original_approved_identity(self):
+        identity = self.identity_fixture(name="credential-fixture")
+        self.write_identity_policy([identity])
+        result = self.check("pre-push", self.new_ref_update())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("credential detected", result.stdout)
+        self.assertNotIn("private denylist match", result.stdout)
+        self.assertNotIn("credential-fixture", result.stdout + result.stderr)
+
+    def test_public_identity_policy_malformed_or_missing_fails_closed(self):
+        valid = {"name": "Approved Contributor", "email": "public" + "@" + "example.invalid"}
+        for value in [{"identities": [valid]}, ["invalid"], [dict(valid, extra=True)],
+                      [dict(valid, name="")], [dict(valid, email=123)],
+                      [dict(valid, name="Injected\nheader")], [dict(valid, name="Bad<name>")],
+                      [dict(valid, email="bad\x00address")], [dict(valid, email="invalid")]]:
+            with self.subTest(value=value):
+                self.write_identity_policy(value)
+                self.assertNotEqual(self.check().returncode, 0)
+        path = self.write_identity_policy([])
+        path.write_text("{invalid json")
+        self.assertNotEqual(self.check().returncode, 0)
+        path.unlink()
+        self.assertNotEqual(self.check().returncode, 0)
+
+    def test_public_identity_policy_must_resolve_outside_checkout(self):
+        inside = self.put("policy.json", "[]")
+        link = self.root / "external-policy-link"
+        link.symlink_to(inside)
+        for path in [inside, link]:
+            with self.subTest(path=path.name):
+                result = self.check(env=dict(self.env, DOTFILES_PUBLIC_IDENTITIES=str(path)))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("must resolve outside", result.stdout)
+
+    def test_force_added_public_identity_policy_is_blocked(self):
+        self.put("public-identities.json", "[]")
+        self.git("add", "--force", "public-identities.json")
+        result = self.check("staged")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("prohibited private path", result.stdout)
 
     def test_untracked_candidates_and_deleted_files(self):
         old = self.put("claude/knowledge/note.md", "private research")

@@ -10,6 +10,7 @@ never echo matched text or scanner output.
 """
 import argparse
 import ipaddress
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -17,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
 
 
 EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@(?:[\w-]+\.)+[A-Za-z]{2,}(?![\w.-])")
@@ -24,6 +26,13 @@ HOME_PATH = re.compile(r"(?<![\w])/(?:Users|home)/[A-Za-z0-9_.-]+")
 IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
 IPV6 = re.compile(r"(?i)(?<![\da-f:])(?:f[cd][\da-f]{2}|fe[89ab][\da-f]):[\da-f:]+")
 OID = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+COMMIT_PERSON = re.compile(rb"^(?:author|committer) (?P<name>[^<>\r\n]+) <(?P<email>[^<>\r\n]+)> -?\d+ [+-]\d{4}$")
+
+
+class Snapshot(NamedTuple):
+    name: str
+    data: bytes
+    kind: str = "file"
 
 
 class CheckError(Exception):
@@ -60,6 +69,58 @@ def denylist():
     except (OSError, UnicodeError, RuntimeError):
         raise CheckError("The configured private denylist could not be read.") from None
     return [line.strip().casefold() for line in values if line.strip() and not line.lstrip().startswith("#")]
+
+
+def public_identities():
+    configured = os.environ.get("DOTFILES_PUBLIC_IDENTITIES")
+    if not configured:
+        local_dir = os.environ.get("DOTFILES_LOCAL_DIR")
+        config_dir = os.environ.get("XDG_CONFIG_HOME")
+        directory = (Path(local_dir).expanduser() if local_dir else
+                     (Path(config_dir).expanduser() if config_dir else Path.home() / ".config") / "dotfiles")
+        default = directory / "public-identities.json"
+        if not default.exists() and not default.is_symlink():
+            return set()
+        configured = str(default)
+    try:
+        path = Path(configured).expanduser().resolve()
+        checkout = Path.cwd().resolve()
+        if path == checkout or checkout in path.parents:
+            raise CheckError("The public identity policy must resolve outside this checkout.")
+        values = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, RuntimeError, ValueError):
+        raise CheckError("The configured public identity policy could not be read as valid JSON.") from None
+    if not isinstance(values, list):
+        raise CheckError("The public identity policy must be an array of name/email objects.")
+    identities = set()
+    for value in values:
+        if not isinstance(value, dict) or set(value) != {"name", "email"}:
+            raise CheckError("Each public identity must contain exactly name and email.")
+        name, email = value["name"], value["email"]
+        if (not all(isinstance(item, str) and item and item == item.strip() and item.isprintable()
+                    for item in [name, email]) or
+                any(character in name for character in "<>") or
+                not re.fullmatch(r"[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+", email)):
+            raise CheckError("The public identity policy contains an invalid name or email.")
+        identities.add((name.encode("utf-8"), email.encode("utf-8")))
+    return identities
+
+
+def generic_scan_data(snapshot, identities):
+    """Mask approved identity spans only in genuine commit header records."""
+    if snapshot.kind != "commit" or not identities:
+        return snapshot.data
+    headers, separator, message = snapshot.data.partition(b"\n\n")
+    if not separator:
+        return snapshot.data
+    lines = headers.split(b"\n")
+    for index, line in enumerate(lines):
+        match = COMMIT_PERSON.fullmatch(line)
+        if match and (match["name"], match["email"]) in identities:
+            # Keep the field name, separators, timestamp and timezone available
+            # to all generic checks. Only the exact identity span is approved.
+            lines[index] = line[:match.start("name")] + line[match.end("email") + 1:]
+    return b"\n".join(lines) + separator + message
 
 
 def text_reasons(text, private_terms):
@@ -112,7 +173,7 @@ def prohibited(path):
         "settings.local.json",
         "credentials.json", "credentials", "id_rsa", "id_ed25519", ".netrc",
         ".npmrc", ".pypirc", ".python_history", ".zsh_history", ".bash_history",
-        "privacy-denylist", "privacy-denylist.txt",
+        "privacy-denylist", "privacy-denylist.txt", "public-identities.json",
     } or (name.startswith(".env") and name not in {".env.example", ".env.sample"}))
 
 
@@ -124,9 +185,9 @@ def working_files():
         name = os.fsdecode(raw)
         path = Path(name)
         if path.is_symlink():
-            yield name, os.fsencode(os.readlink(path))
+            yield Snapshot(name, os.fsencode(os.readlink(path)))
         elif path.is_file():
-            yield name, path.read_bytes()
+            yield Snapshot(name, path.read_bytes())
         elif path.exists():
             raise CheckError("A candidate path is not a regular file; review submodules separately.")
         # Unstaged deletions are deliberately absent from the working-tree export.
@@ -142,7 +203,7 @@ def staged_files():
             raise CheckError("The index has unresolved conflicts.")
         if mode == "160000":
             raise CheckError("The index includes a submodule; review its contents separately.")
-        yield os.fsdecode(raw_path), git("cat-file", "blob", oid)
+        yield Snapshot(os.fsdecode(raw_path), git("cat-file", "blob", oid))
 
 
 def push_files(updates):
@@ -160,7 +221,7 @@ def push_files(updates):
         _, local, remote_ref, remote = fields
         if set(local) == {"0"}:
             continue
-        yield "<outgoing ref name>", remote_ref.encode("utf-8")
+        yield Snapshot("<outgoing ref name>", remote_ref.encode("utf-8"), "ref")
         kind = git("cat-file", "-t", local).strip()
         peeled = local
         # Include annotated tag text, even for nested tags and already-shared commits.
@@ -177,10 +238,10 @@ def push_files(updates):
             args += ["--not", remote]
         commits.update(git(*args).decode("ascii").splitlines())
     for oid in sorted(tag_objects):
-        yield "<tag metadata " + oid[:12] + ">", git("cat-file", "tag", oid)
+        yield Snapshot("<tag metadata " + oid[:12] + ">", git("cat-file", "tag", oid), "tag")
     seen = set()
     for commit in sorted(commits):
-        yield "<commit metadata " + commit[:12] + ">", git("cat-file", "commit", commit)
+        yield Snapshot("<commit metadata " + commit[:12] + ">", git("cat-file", "commit", commit), "commit")
         for record in git("ls-tree", "-r", "-z", commit).split(b"\0"):
             if not record:
                 continue
@@ -191,10 +252,10 @@ def push_files(updates):
             key = (raw_path, oid)
             if key not in seen:
                 seen.add(key)
-                yield os.fsdecode(raw_path), git("cat-file", "blob", oid)
+                yield Snapshot(os.fsdecode(raw_path), git("cat-file", "blob", oid))
 
 
-def check(files, private_terms):
+def check(files, private_terms, identities):
     scanner = shutil.which("gitleaks")
     if not scanner:
         raise CheckError("Required gitleaks scanner is unavailable; install it before publication.")
@@ -210,7 +271,8 @@ def check(files, private_terms):
         ignore = root / "empty.ignore"
         ignore.touch(mode=0o600)
         filenames = []
-        for count, (name, data) in enumerate(files, 1):
+        for count, snapshot in enumerate(files, 1):
+            name, data = snapshot.name, snapshot.data
             filenames.append(name)
             filename_reasons = text_reasons(name, private_terms)
             if prohibited(name):
@@ -222,7 +284,8 @@ def check(files, private_terms):
                 findings.append((safe_name, 0, "binary file requires manual privacy review"))
             if data.startswith(b"version https://git-lfs.github.com/spec/v1\n"):
                 findings.append((safe_name, 0, "Git LFS payload requires a separate privacy review"))
-            for number, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+            generic_data = generic_scan_data(snapshot, identities)
+            for number, line in enumerate(generic_data.decode("utf-8", errors="replace").splitlines(), 1):
                 findings.extend((safe_name, number, reason) for reason in sorted(text_reasons(line, private_terms)))
             # Preserve filenames for path-sensitive credential rules. Each snapshot
             # gets its own directory, with no symlinks or repository-supplied rules.
@@ -269,7 +332,7 @@ def main():
         os.chdir(root)
         files = {"working-tree": working_files, "staged": staged_files,
                  "pre-push": lambda: push_files(sys.stdin.read())}[args.mode]()
-        return check(files, denylist())
+        return check(files, denylist(), public_identities())
     except (CheckError, OSError, UnicodeError) as error:
         # Unexpected OS errors can contain sensitive filenames; never display them.
         print("BLOCKED:", str(error) if isinstance(error, CheckError) else "Could not complete privacy checks.")
