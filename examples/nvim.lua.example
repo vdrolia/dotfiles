@@ -1,0 +1,38 @@
+-- Copy OUTSIDE the repository to $DOTFILES_LOCAL_DIR/nvim.lua.
+-- Otherwise use <parent of stdpath("config")>/dotfiles/nvim.lua.
+-- DOTFILES_NVIM_LOCAL can point directly to a different private file.
+return {
+  -- shell = { command = "/bin/bash" }, -- omit to retain the platform default
+  clipboard = { enabled = true, mode = "unnamed" }, -- provider = "tmux", for example
+  icons = { enabled = true }, -- false for terminals without a Nerd Font
+  paths = {
+    bin = {}, -- e.g. { "/path/to/node/bin" }; tools that invoke node use PATH
+    -- backup = vim.fs.joinpath(vim.fn.stdpath("state"), "backup"),
+    -- mason = vim.fs.joinpath(vim.fn.stdpath("data"), "mason"),
+  },
+  tools = {
+    -- git = "git", rg = "rg", fd = "fd", cmake = "cmake", c_compiler = "cc",
+    -- direnv = "direnv", go = "go", gopls = "gopls",
+    -- tsserver = "/path/to/typescript/lib/tsserver.js",
+    -- debugpy_python = "/path/to/debug-adapter-venv/bin/python",
+    -- python = function() return "/path/to/current-project-venv/bin/python" end,
+    -- git_base_branch = function(repo_root) return "main" end,
+    -- ensure_installed = { "shfmt", "stylua", "debugpy", "prettier", "typescript-language-server" },
+    formatters = {}, -- e.g. shfmt = "/path/to/shfmt"
+    -- formatters_by_ft = { lua = { "stylua" }, markdown = {} }, -- {} disables a filetype's formatters
+  },
+  resource_limits = { typescript_memory_mb = 2048, eslint_memory_mb = 1024 },
+  servers = {
+    -- ensure_installed = { "lua_ls", "eslint", "bashls", "basedpyright", "ruff", "marksman", "gopls" },
+    configs = {}, -- e.g. basedpyright = { cmd = { "/path/to/basedpyright-langserver", "--stdio" } }
+  },
+  parsers = {
+    -- ensure_installed = { "lua", "python", "go", "markdown", "markdown_inline" },
+  },
+  features = {
+    bootstrap = true, -- allow lazy.nvim and missing plugins to be installed
+    auto_install = true, -- allow Mason tools and configured parsers to be installed
+    native_fzf = true, -- requires CMake and a C compiler; Lua sorter is the fallback
+    direnv = true, treesitter = true, go = true, python = true,
+  },
+}

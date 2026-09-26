@@ -1,0 +1,23 @@
+[user]
+  useConfigOnly = true
+[core]
+  whitespace = blank-at-eol,space-before-tab,tab-in-indent,blank-at-eof
+[color]
+  branch      = auto
+  diff        = auto
+  interactive = auto
+  status      = auto
+[alias]
+  graph = log --graph --all --decorate=full --oneline
+  lg    = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
+	whatchanged = log --raw --no-merges
+[pull]
+  rebase = true
+[merge]
+  conflictstyle = diff3
+[rerere]
+  enabled = 1
+[push]
+  default = simple
+[include]
+  path = ~/.gitconfig.local

@@ -1,0 +1,17 @@
+" Copy to ~/.vimrc.local; keep that file outside the public repository.
+" These variables are read before dependent configuration runs.
+" let g:dotfiles_shell = '/bin/sh'
+" let g:dotfiles_fzf_path = expand('~/.fzf')
+" let g:dotfiles_guifont = 'Monospace:h12'
+" let g:dotfiles_clipboard = 'unnamedplus'
+" let g:dotfiles_backupdir = expand('~/.cache/vim/backups')
+" let g:dotfiles_swapdir = expand('~/.cache/vim/swap')
+" let g:dotfiles_prettier_executable = 'prettier'
+" let g:dotfiles_rubocop_executable = 'rubocop'
+" let g:dotfiles_plugins_dir = expand('~/.vim/plugged')
+" let g:dotfiles_enable_plugins = 0
+
+" This optional callback runs after the shared settings and mappings.
+" function! DotfilesVimLocal()
+"   set numberwidth=4
+" endfunction

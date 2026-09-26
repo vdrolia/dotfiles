@@ -1,0 +1,102 @@
+# Account configuration and credentials belong in each CLI's private config.
+function createIssue() {
+  jira issue create -t "$1" -a "$2" -y "$3" -P "$4" -s "$5"
+}
+
+function createBug() {
+  createIssue "Bug" "$1" "$2" "$3" "$4"
+}
+
+function findIssue() {
+  jira issue list --plain -t "$1" -s "${DOTFILES_JIRA_STATUS:-~Open}" | grep -i -- "$2" | awk '{print $2}'
+}
+
+function findEpic() { findIssue "Epic" "$1"; }
+function findBug() { findIssue "Bug" "$1"; }
+function findTask() { findIssue "Task" "$1"; }
+
+function findSummary() {
+  jira issue list --no-headers --plain --columns SUMMARY -q "key = $1" | awk 'BEGIN { FS="\t" } { print $2 }'
+}
+
+function assertNotEmpty() {
+  if [[ -z "$2" ]]; then
+    print -u2 -- "Error: $1 is empty or null"
+    return 1
+  fi
+}
+
+function getBranch() {
+  # Branch names are published metadata. Ticket identifiers/summaries are opt-in.
+  if [[ ${DOTFILES_BRANCH_TICKET_CONTEXT:-0} != 1 ]]; then
+    local suffix
+    suffix=$(LC_ALL=C od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+    [[ "$suffix" =~ '^[0-9a-f]{16}$' ]] || return 1
+    print -r -- "change-$suffix"
+    return
+  fi
+  assertNotEmpty "issue key" "$1" || return
+  local summary slug
+  summary=$(findSummary "$1") || return
+  assertNotEmpty "summary" "$summary" || return
+  slug=$(print -r -- "$summary" | cut -c '1-20' | tr '[:upper:] ' '[:lower:]-' | tr -cds '[:alnum:]-' '-' | sed 's/-$//')
+  print -r -- "$1-$slug"
+}
+
+function getCurrentBranch() { git symbolic-ref --quiet --short HEAD; }
+
+function gpos() {
+  local br_name
+  br_name=$(getCurrentBranch) || return
+  assertNotEmpty "branch" "$br_name" || return
+  git push "${DOTFILES_GIT_REMOTE:-origin}" --set-upstream "$br_name"
+}
+
+function getEC2IdByName() {
+  local instance_name="${1:-${DOTFILES_EC2_NAME:-}}" instance_ids
+  assertNotEmpty "instance name (argument or DOTFILES_EC2_NAME)" "$instance_name" || return
+  instance_ids=$(aws ec2 describe-instances \
+    --filters "Name=tag:Name,Values=$instance_name" \
+    --query 'Reservations[*].Instances[*].InstanceId' --output text) || return
+  local -a ids
+  ids=(${=instance_ids})
+  if (( ${#ids} != 1 )) || [[ "${ids[1]}" != i-* ]]; then
+    print -u2 -- "Expected exactly one EC2 instance for: $instance_name"
+    return 1
+  fi
+  # stdout must contain only the ID so callers can safely capture it.
+  print -r -- "${ids[1]}"
+}
+
+function stopEC2ByName() {
+  local instance_id
+  instance_id=$(getEC2IdByName "$1") || return
+  print -u2 -- "Stopping instance $instance_id..."
+  aws ec2 stop-instances --instance-ids "$instance_id"
+}
+
+function startEC2ByName() {
+  local instance_id
+  instance_id=$(getEC2IdByName "$1") || return
+  print -u2 -- "Starting instance $instance_id..."
+  aws ec2 start-instances --instance-ids "$instance_id"
+}
+
+function checkEC2Start() {
+  local instance_id="$1" instance_state
+  assertNotEmpty "instance ID" "$instance_id" || return
+  while true; do
+    instance_state=$(aws ec2 describe-instances --instance-ids "$instance_id" \
+      --query 'Reservations[*].Instances[*].State.Name' --output text) || return
+    if [[ "$instance_state" == running ]]; then
+      print -r -- "Instance $instance_id is running."
+      return
+    elif [[ "$instance_state" == pending ]]; then
+      print -r -- "Instance $instance_id is still starting up..."
+    else
+      print -u2 -- "Instance $instance_id is in an unexpected state: $instance_state"
+      return 1
+    fi
+    sleep 1
+  done
+}

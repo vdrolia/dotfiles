@@ -1,0 +1,7 @@
+# Copy to ~/.tmux.conf.local; keep that file outside the public repository.
+# This file loads after portable defaults and can override shell or terminal.
+# set -g default-shell /bin/sh
+# set -g default-terminal screen-256color
+# set -g history-limit 100000
+# Bind y to tmux's internal clipboard even when a desktop clipboard is available:
+# bind-key -T copy-mode-vi y send-keys -X copy-selection-and-cancel

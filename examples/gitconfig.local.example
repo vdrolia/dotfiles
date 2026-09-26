@@ -1,0 +1,21 @@
+# Copy to ~/.gitconfig.local and fill in locally. Never commit your real copy.
+[user]
+  # name = Your chosen public commit name
+  # email = Your chosen public commit email
+
+[core]
+  pager = less
+
+# Optional: only enable this if SSH authentication is configured locally.
+# [url "git@gitlab.com:"]
+#   insteadOf = https://gitlab.com/
+
+# Optional: only enable these filters on machines with git-lfs installed.
+# [filter "lfs"]
+#   clean = git-lfs clean -- %f
+#   smudge = git-lfs smudge -- %f
+#   process = git-lfs filter-process
+#   required = true
+
+# Per-directory identity rules, signing keys and credential helpers go here too.
+# Identity values become part of any commits you create, even from private config.

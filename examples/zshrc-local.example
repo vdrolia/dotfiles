@@ -1,0 +1,16 @@
+# Copy to ~/.zshrc-local. Loaded LAST, after shared aliases and functions.
+# Keep machine names, personal paths and private wrappers in the real local file.
+
+# alias vim=vi
+# DOTFILES_GIT_REMOTE=origin
+# DOTFILES_JIRA_STATUS='~Open'
+
+# Branches default to random change-... names, without a Jira lookup.
+# Enabling this includes the ticket key and summary in published branch metadata.
+# DOTFILES_BRANCH_TICKET_CONTEXT=1
+
+# startWorkMachine() { startEC2ByName "$DOTFILES_EC2_NAME"; }
+# stopWorkMachine() { stopEC2ByName "$DOTFILES_EC2_NAME"; }
+
+# To layer local Ack options over shared defaults instead of replacing them:
+# ack() { command ack --ackrc="$DOTFILES_LOCAL_DIR/ack.local" "$@"; }

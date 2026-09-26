@@ -1,0 +1,16 @@
+{
+  "enablePrefetching": 2,
+  "jsApps": {
+    "webAppLauncher": {
+      "height": 600,
+      "width": 800
+    }
+  },
+  "reactNative": {
+    "shortcuts": {
+      "enabled": false,
+      "reload": "Alt+Shift+R",
+      "openDevMenu": "Alt+Shift+D"
+    }
+  }
+}

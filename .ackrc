@@ -1,0 +1,71 @@
+# Always color, even if piping to a another program
+--color
+
+--ignore-dir=.venv/
+--ignore-dir=.dart_tool/
+--ignore-dir=.firebase/
+--ignore-dir=.idea/
+--ignore-dir=.next/
+--ignore-dir=.symlinks/
+--ignore-dir=bin
+--ignore-dir=bundle/
+--ignore-dir=coverage
+--ignore-dir=coverage/
+--ignore-dir=dist/
+--ignore-dir=doc
+--ignore-dir=docs/
+--ignore-dir=log
+--ignore-dir=node_modules/
+--ignore-dir=out/
+--ignore-dir=public
+--ignore-dir=spec/fixtures
+--ignore-dir=target
+--ignore-dir=tmp
+--ignore-dir=vendor
+
+# Ignore React native output
+--ignore-dir=android/build/
+--ignore-dir=android/app/build/
+--ignore-dir=ios/build/
+--ignore-dir=ios/Pods/
+--ignore-dir=.jest/
+--ignore-file=is:tsconfig.tsbuildinfo
+--ignore-file=is:tags
+# Ignore iOS Pods
+--ignore-dir=ios/Pods/
+
+
+#make sure ack knows how to search common filetypes used in rails projects
+--type-add=css:ext:scss
+--type-set=js:ext:js,jsx,json
+--type-set=jsx:ext:jsx
+--type-add=ruby:ext:haml,rselm,feature,ru,lock
+--type-set=coffeescript:ext:coffee
+--type-set=coffee:ext:coffee
+
+#make sure ack knows how to search common filetypes used in node.js projects
+--ignore-dir=node_modules
+--type-set=coffee:ext:coffee
+--type-set=jade:ext:jade
+--type-set=feature:ext:feature
+--type-set=json:ext:json
+--ignore-case
+
+# Java 
+--type-set=java:ext:java
+--type-set=javaclass:ext:class
+--nojavaclass
+
+# Lock
+--type-set=lock:ext:lock
+--nolock
+
+# yarn log
+--type-set=yarnlog:match:/yarn(-error)?.log/
+--noyarnlog
+
+
+--sort-files
+--follow
+--color
+--group

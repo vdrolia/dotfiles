@@ -1,0 +1,5 @@
+#!/bin/sh
+# Check the exact index, including files staged outside the current directory.
+set -eu
+repo=$(git rev-parse --show-toplevel)
+exec python3 "$repo/scripts/check-public.py" --mode staged

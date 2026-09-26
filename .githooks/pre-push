@@ -1,0 +1,5 @@
+#!/bin/sh
+# Git supplies ref updates on stdin. This hook never initiates a push.
+set -eu
+repo=$(git rev-parse --show-toplevel)
+exec python3 "$repo/scripts/check-public.py" --mode pre-push --remote "${1-}"

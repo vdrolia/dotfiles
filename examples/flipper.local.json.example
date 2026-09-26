@@ -1,0 +1,10 @@
+{
+  "androidHome": "/path/to/android-sdk",
+  "enableAndroid": true,
+  "enableIOS": false,
+  "jsApps": {
+    "webAppLauncher": {
+      "url": "http://localhost:8888"
+    }
+  }
+}

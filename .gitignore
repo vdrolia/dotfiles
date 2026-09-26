@@ -1,0 +1,34 @@
+# Keep Claude configuration and runtime state outside this repository.
+/claude/
+/.claude/
+/.claude.json*
+
+# Private overrides and generated machine configuration.
+/.gitconfig.local
+/.zshrc-local
+/.vimrc.local
+/.tmux.conf.local
+/local/
+/private/
+/.config/dotfiles/
+/.config/nvim/local.lua
+/.config/nvim/lua/config/local.lua
+**/settings.local.json
+.env
+.env.*
+!.env.example
+
+# Local runtime state, backups, and verification output.
+/tasks/
+/logs/
+/reports/
+/backups/
+/screenshots/
+*.log
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+__pycache__/
+*.py[cod]
