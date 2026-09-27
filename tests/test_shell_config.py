@@ -51,10 +51,10 @@ class ShellConfigTests(unittest.TestCase):
             target.chmod(0o700)
         return target
 
-    def run_zsh(self, body, *, setup=True):
-        source = REPO / (".zshrc" if setup else ".zshrc-functions")
+    def run_zsh(self, body, *, setup=True, source=None, before=""):
+        source = source or REPO / (".zshrc" if setup else ".zshrc-functions")
         return subprocess.run(
-            [ZSH, "-dfc", f"source {shlex.quote(str(source))}\n{body}"],
+            [ZSH, "-dfc", f"{before}\nsource {shlex.quote(str(source))}\n{body}"],
             cwd=self.root,
             env=self.env,
             text=True,
@@ -98,6 +98,87 @@ class ShellConfigTests(unittest.TestCase):
         )
         self.assert_success(result)
         self.assertEqual(result.stdout.splitlines(), [str(first), str(second), "4"])
+
+    def test_arbitrary_checkout_and_repeated_sources_preserve_local_overrides(self):
+        checkout = self.root / "another checkout"
+        checkout.mkdir()
+        for name in [".zshrc", ".zshrc-functions"]:
+            shutil.copyfile(REPO / name, checkout / name)
+        self.early("(( early_loads += 1 ))\n")
+        self.file("oh-my-zsh/oh-my-zsh.sh", "(( framework_loads += 1 ))\n")
+        self.file("bun/_bun", "(( bun_loads += 1 ))\n")
+        self.file("late.zsh", "(( late_loads += 1 ))\n")
+        result = self.run_zsh(
+            "getBranch() { print -r -- existing-helper; }\n"
+            "HISTSIZE=2468\n"
+            f"source {shlex.quote(str(checkout / '.zshrc'))}\n"
+            f"source {shlex.quote(str(checkout / '.zshrc-functions'))}\n"
+            "getBranch\nprint -r -- $early_loads:$framework_loads:$bun_loads:$late_loads:$HISTSIZE",
+            source=checkout / ".zshrc",
+        )
+        self.assert_success(result)
+        self.assertEqual(result.stdout, "existing-helper\n1:1:1:1:2468\n")
+
+    def test_coexistence_leaves_framework_initialization_to_existing_config(self):
+        self.env["DOTFILES_ZSH_FRAMEWORKS"] = "0"
+        self.file("oh-my-zsh/oh-my-zsh.sh", "(( framework_loads += 1 ))\n")
+        self.file("bun/_bun", "(( bun_loads += 1 ))\n")
+        self.file("legacy/asdf.sh", "(( asdf_loads += 1 ))\nasdf() { :; }\n")
+        binary = self.file("bin/direnv", "#!/bin/sh\nexit 0\n", True)
+        self.early(f"DOTFILES_EXTRA_PATH=({shlex.quote(str(binary.parent))})\n")
+        result = self.run_zsh(
+            "print -r -- ${framework_loads:-0}:${bun_loads:-0}:${+functions[asdf]}:${+functions[_direnv_hook]}:${(j:,:)plugins}\n"
+            'source "$ZSH/oh-my-zsh.sh"\nsource "$BUN_INSTALL/_bun"\nsource "$ASDF_DIR/asdf.sh"\n'
+            "print -r -- $framework_loads:$bun_loads:$asdf_loads:${+functions[getBranch]}",
+            before="plugins=(existing-plugin)",
+        )
+        self.assert_success(result)
+        self.assertEqual(result.stdout, "0:0:0:0:existing-plugin\n1:1:1:1\n")
+
+    def test_coexistence_does_not_claim_framework_defaults(self):
+        self.env["DOTFILES_ZSH_FRAMEWORKS"] = "0"
+        for name in ["ZSH", "ASDF_DATA_DIR", "BUN_INSTALL"]:
+            self.env.pop(name)
+        result = self.run_zsh("print -r -- ${+ZSH}:${+ZSH_THEME}:${+plugins}:${+ASDF_DATA_DIR}:${+BUN_INSTALL}")
+        self.assert_success(result)
+        self.assertEqual(result.stdout, "0:0:0:0:0\n")
+
+    def test_coexistence_skips_implicit_overlay_but_honors_explicit_selection(self):
+        checkout = self.root / "overlay checkout"
+        checkout.mkdir()
+        implicit = self.file("conventional-overlay.zsh", "(( overlay_loads += 1 ))\n")
+        shared = checkout / ".zshrc"
+        # Redirect the conventional path in a fixture copy, without touching or
+        # changing HOME. Exercise the actual selection logic against a real file.
+        shared.write_text((REPO / ".zshrc").read_text().replace("$HOME/.zshrc-local", str(implicit)))
+        shutil.copyfile(REPO / ".zshrc-functions", checkout / ".zshrc-functions")
+        self.env["DOTFILES_ZSH_FRAMEWORKS"] = "0"
+        self.env.pop("DOTFILES_ZSH_LOCAL")
+        result = self.run_zsh("print -r -- ${overlay_loads:-0}", source=shared)
+        self.assert_success(result)
+        self.assertEqual(result.stdout, "0\n")
+        self.env["DOTFILES_ZSH_LOCAL"] = str(implicit)
+        result = self.run_zsh("print -r -- ${overlay_loads:-0}", source=shared)
+        self.assert_success(result)
+        self.assertEqual(result.stdout, "1\n")
+
+    def test_already_loaded_frameworks_are_preserved(self):
+        self.file("oh-my-zsh/oh-my-zsh.sh", "print -u2 -- framework-loaded-twice\n")
+        binary = self.file("bin/direnv", "#!/bin/sh\nexit 0\n", True)
+        self.early(f"DOTFILES_EXTRA_PATH=({shlex.quote(str(binary.parent))})\n")
+        result = self.run_zsh(
+            "_direnv_hook\nprint -r -- ${(j:,:)plugins}",
+            before="omz() { :; }\n_direnv_hook() { print -r -- existing-direnv; }\nplugins=(existing-plugin)",
+        )
+        self.assert_success(result)
+        self.assertEqual(result.stdout, "existing-direnv\nexisting-plugin\n")
+
+    def test_existing_plugin_selection_is_used_before_framework_bootstrap(self):
+        self.file("oh-my-zsh/plugins/existing-plugin/existing-plugin.plugin.zsh")
+        self.file("oh-my-zsh/oh-my-zsh.sh", 'print -r -- "${(j:,:)plugins}"\n')
+        result = self.run_zsh("true", before="plugins=(existing-plugin)")
+        self.assert_success(result)
+        self.assertEqual(result.stdout, "existing-plugin\n")
 
     def test_native_asdf_does_not_load_legacy_script(self):
         binary = self.file("bin/asdf", "#!/bin/sh\nprintf 'native:%s\\n' \"$1\"\n", True)

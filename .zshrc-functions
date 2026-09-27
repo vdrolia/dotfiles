@@ -1,3 +1,7 @@
+# Preserve local replacements when this shared helper file is sourced again.
+(( ${+_dotfiles_zsh_functions_loaded} )) && return 0
+typeset -g _dotfiles_zsh_functions_loaded=1
+
 # Account configuration and credentials belong in each CLI's private config.
 function createIssue() {
   jira issue create -t "$1" -a "$2" -y "$3" -P "$4" -s "$5"

@@ -32,7 +32,7 @@ class NeovimConfigTests(unittest.TestCase):
             self.env[key] = str(self.root / subdir)
         self.env.update(DOTFILES_NVIM_LOCAL=str(self.local), GIT_OPTIONAL_LOCKS="0",
                         GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-        for key in ("NVIM_APPNAME", "VIMINIT", "EXINIT", "MYVIMRC"):
+        for key in ("NVIM_APPNAME", "NVIM_LOG_FILE", "VIMINIT", "EXINIT", "MYVIMRC"):
             self.env.pop(key, None)
         for key in ("VIRTUAL_ENV", "CONDA_PREFIX"):
             self.env.pop(key, None)
@@ -40,13 +40,14 @@ class NeovimConfigTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def lua(self, body, startup=False):
+    def lua(self, body, startup=False, discover_config=False):
         script = self.root / "check.lua"
         script.write_text("local ok, err = xpcall(function()\n" + body + "\nend, debug.traceback)\n"
                           "if not ok then io.stderr:write(err .. '\\n'); vim.cmd('cquit 1') else vim.cmd('qa!') end\n")
-        command = [NVIM, "--headless", "-n", "-i", "NONE", "-u",
-                   str(self.config / "init.lua") if startup else "NONE"]
-        if not startup:
+        command = [NVIM, "--headless", "-n", "-i", "NONE"]
+        if not discover_config:
+            command += ["-u", str(self.config / "init.lua") if startup else "NONE"]
+        if not startup and not discover_config:
             command += ["--cmd", "lua vim.opt.rtp:prepend(" + json.dumps(str(self.config)) + ")"]
         command += ["-c", "lua dofile(" + json.dumps(str(script)) + ")"]
         result = subprocess.run(command, env=self.env, cwd=self.root, text=True,
@@ -57,6 +58,66 @@ class NeovimConfigTests(unittest.TestCase):
 
     def test_all_lua_parses(self):
         self.lua("for _, file in ipairs(vim.fn.globpath(vim.fn.stdpath('config'), '**/*.lua', false, true)) do assert(loadfile(file)) end")
+
+    def test_named_profile_preserves_existing_configuration_and_state(self):
+        source = self.root / "another checkout with spaces" / ".config" / "nvim"
+        source.parent.mkdir(parents=True)
+        shutil.move(str(self.config), source)
+        self.config.mkdir()
+        (self.config / "init.lua").write_text("vim.g.existing_config_loaded = true\n")
+        existing_module = self.config / "lua" / "config" / "machine.lua"
+        existing_module.parent.mkdir(parents=True)
+        existing_module.write_text("return {owner = 'existing configuration'}\n")
+        existing_plugin = self.root / "data" / "nvim" / "site" / "plugin" / "existing.lua"
+        existing_plugin.parent.mkdir(parents=True)
+        existing_plugin.write_text("vim.g.existing_plugin_loaded = true\n")
+        existing_directories = [self.root / kind / "nvim" for kind in ("config", "data", "state", "cache")]
+        for directory in existing_directories:
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "preserve-me").write_bytes(b"existing editor data\n")
+        self.lua("""
+assert(vim.g.existing_config_loaded and vim.g.existing_plugin_loaded)
+assert(require('config.machine').owner == 'existing configuration')
+""", discover_config=True)
+
+        def existing_snapshot():
+            return {str(path.relative_to(self.root)): path.read_bytes()
+                    for directory in existing_directories for path in directory.rglob("*") if path.is_file()}
+
+        before = existing_snapshot()
+        profile = "dotfiles-nvim-test"
+        self.config = self.root / "config" / profile
+        # Match per-file links and the local lockfile seed, from a checkout path with spaces.
+        for original in source.rglob("*"):
+            if original.is_file():
+                target = self.config / original.relative_to(source)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if original.name == "lazy-lock.json":
+                    shutil.copy2(original, target)
+                else:
+                    target.symlink_to(original)
+        private = self.root / "config" / "dotfiles" / "nvim.lua"
+        private.parent.mkdir(parents=True)
+        private.write_text(self.local.read_text())
+        self.env.pop("DOTFILES_NVIM_LOCAL")
+        self.env.pop("DOTFILES_LOCAL_DIR", None)
+        self.env["NVIM_APPNAME"] = profile
+        self.lua("""
+assert(vim.g.existing_config_loaded == nil and vim.g.existing_plugin_loaded == nil)
+local machine = require('config.machine')
+assert(machine.get().features.bootstrap == false)
+assert(machine.local_path() == vim.fs.joinpath(vim.env.XDG_CONFIG_HOME, 'dotfiles', 'nvim.lua'))
+for _, kind in ipairs({'config', 'data', 'state', 'cache'}) do
+  local base = vim.env['XDG_' .. kind:upper() .. '_HOME']
+  assert(vim.fn.stdpath(kind) == vim.fs.joinpath(base, vim.env.NVIM_APPNAME))
+end
+assert(machine.get().paths.mason == vim.fs.joinpath(vim.fn.stdpath('data'), 'mason'))
+assert(machine.get().paths.backup == vim.fs.joinpath(vim.fn.stdpath('state'), 'backup'))
+assert(not vim.tbl_contains(vim.opt.runtimepath:get(), vim.fs.joinpath(vim.env.XDG_CONFIG_HOME, 'nvim')))
+""", discover_config=True)
+        self.assertEqual(existing_snapshot(), before)
+        del self.env["NVIM_APPNAME"]
+        self.lua("assert(vim.g.existing_config_loaded and vim.g.existing_plugin_loaded)", discover_config=True)
 
     def test_private_precedence_and_portable_defaults(self):
         self.local.write_text("return {resource_limits={typescript_memory_mb=3072},icons={enabled=false}}")
@@ -181,11 +242,28 @@ require('config.machine').get().tools.debugpy_python = '/does/not/exist'
 assert(python.debugpy() == nil)
 """)
 
-    def use_plugin_fixture(self):
+    def use_plugin_fixture(self, profile="nvim"):
         plugin_root = Path(os.environ["DOTFILES_NVIM_TEST_PLUGIN_ROOT"]).resolve()
-        lazy = self.root / "data" / "nvim" / "lazy"
+        lazy = self.root / "data" / profile / "lazy"
         lazy.parent.mkdir(parents=True)
         lazy.symlink_to(plugin_root, target_is_directory=True)
+
+    @unittest.skipUnless(os.environ.get("DOTFILES_NVIM_TEST_PLUGIN_ROOT"), "Isolated plugin fixture not supplied")
+    def test_pinned_plugins_use_named_profile_paths(self):
+        profile = "dotfiles-nvim-test"
+        original = self.config
+        self.config = original.with_name(profile)
+        original.rename(self.config)
+        self.env["NVIM_APPNAME"] = profile
+        self.use_plugin_fixture(profile)
+        self.lua("""
+local lazy = require('lazy.core.config').options
+assert(lazy.root == vim.fs.joinpath(vim.fn.stdpath('data'), 'lazy'))
+assert(lazy.lockfile == vim.fs.joinpath(vim.fn.stdpath('config'), 'lazy-lock.json'))
+assert(lazy.state == vim.fs.joinpath(vim.fn.stdpath('state'), 'lazy', 'state.json'))
+assert(require('mason.settings').current.install_root_dir == vim.fs.joinpath(vim.fn.stdpath('data'), 'mason'))
+assert(vim.lsp.config.gopls.settings.gopls.completeUnimported)
+""", discover_config=True)
 
     @unittest.skipUnless(os.environ.get("DOTFILES_NVIM_TEST_PLUGIN_ROOT"), "Isolated plugin fixture not supplied")
     def test_pinned_eslint_save_regression(self):

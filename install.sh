@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install shared links and private writable configuration from the manifest.
+# Compose selected dotfile modules with existing local configuration.
 set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! command -v python3 >/dev/null 2>&1; then

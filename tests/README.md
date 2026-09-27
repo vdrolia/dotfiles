@@ -9,6 +9,10 @@ python3 -B -m unittest discover -s tests -v
 The tests create temporary destinations and use explicit configuration overrides.
 They do not replace the real home directory or run the installer against it.
 Tool-dependent checks report when a required executable is unavailable.
+Installer checks cover modular composition, preserved existing files and foreign
+symlink targets, repeat installation, component selection, and native config
+loading. Neovim profile checks keep a separate preexisting editor setup active
+and verify that the additional profile uses independent standard directories.
 
 Before sharing current files, run:
 

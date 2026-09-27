@@ -9,6 +9,18 @@ separately and are not installed or synchronized here.
 
 Requires Bash, Python 3.9+, Git, and POSIX symlinks. Targets macOS and Linux/WSL;
 native Windows installation is unsupported. Install applications separately.
+Keep this checkout anywhere you like; it does not claim `~/.dotfiles` or require
+you to rename or replace an existing dotfiles repository.
+
+For a machine that already has its own setup, choose the components to add:
+
+```sh
+./install.sh --list-components
+./install.sh --components zsh,git --dry-run
+./install.sh --components zsh,git
+```
+
+The default mode is modular. Omitting `--components` selects all components:
 
 ```sh
 ./install.sh --dry-run
@@ -19,16 +31,41 @@ Automatic pushes are disabled on new clones, including work machines. Normal
 installation and `--install-hooks` do not enable them. Reinstalling preserves a
 clone's existing explicit choice.
 
-Only `install-manifest.json` entries are installed. Shared configuration files
-become symlinks. Tool versions, htop settings, and Flipper settings become
-writable local copies seeded from `templates/`. Existing local contents are
-preserved, including when detaching an old file symlink.
+Only selected `install-manifest.json` entries are installed. Shared settings
+load first; your existing settings load afterward and retain precedence.
+
+| Component | Modular installation |
+| --- | --- |
+| `zsh` | Add a managed source block to the active `.zshrc`. Existing setup keeps ownership of framework initialization. Helpers load beside the shared source; no separate home helper file is needed. |
+| `git` | Add a native include before existing global Git settings. Existing workplace identities and conditional includes remain authoritative. |
+| `vim` | Add a source block before existing Vim settings. Existing setup keeps ownership of plugin-manager initialization. |
+| `tmux` | Add a source block before existing tmux settings. |
+| `nvim` | Install a separate `dotfiles-nvim` profile and launcher; ordinary `nvim` keeps its existing configuration. |
+| `ack`, `tools`, `htop`, `flipper` | Seed a configuration only when missing. Existing files and symlinks remain intact. |
+
+Regular configuration files retain their existing contents outside the managed
+block. A symlink to another setup becomes a small local wrapper that sources
+the original target after the shared settings; the other repository's file is
+never edited, and later changes to it still load. A symlink already pointing
+into this checkout becomes a direct include without loading it twice.
+Reinstalling updates the managed block without duplicating it. Component
+selection affects installation; it does not uninstall previously selected apps.
+Use `--components none` when configuring only this checkout's Git hooks or sync.
+Shared shell and Vim settings load once per session; start a fresh shell or Vim
+process after changing them. Existing local settings still load after the block.
+
+Directory symlinks that would route writes into another Git worktree are
+rejected before changes. Add a native include in that setup yourself, or choose
+an entrypoint outside it with the path options below. The installer does not
+merge arbitrary plugin managers, configuration languages, or application state.
 
 Replaced files receive unique private backups under
 `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/backups/`. Each backup includes a
 manifest of destinations, previous symlink targets, and saved contents.
 Repeated installation preserves existing local copies. Previewing performs no
-writes. Directory symlinks routing writes into the checkout must be migrated first.
+writes. To stop loading a module, remove its marked include block. A wrapper
+continues to load its original configuration; the backup manifest also records
+the previous symlink if you want to restore it.
 
 ```sh
 ./install.sh --target-dir /path/to/test-home --config-dir /path/to/test-config
@@ -37,10 +74,25 @@ writes. Directory symlinks routing writes into the checkout must be migrated fir
 `DOTFILES_TARGET_DIR` and `DOTFILES_CONFIG_DIR` provide the same overrides.
 For the real home, `XDG_CONFIG_HOME` selects the configuration root. An alternate
 target defaults to its own `.config` and `.local/state`. XDG directory variables
-must be absolute. Private overrides default to
+must be absolute. Zsh respects `ZDOTDIR` for the real home; `--zsh-dir` selects
+another startup directory. `--git-config`, `--vim-config`, and `--tmux-config`
+select explicit entrypoints. Git and tmux reuse their existing native locations
+instead of creating a higher-priority file that hides them. Private overrides default to
 `${XDG_CONFIG_HOME:-$HOME/.config}/dotfiles`; `DOTFILES_LOCAL_DIR` or the
-installer's `--local-dir` selects another private directory. Applications must
-receive the corresponding environment setting for a custom location.
+installer's `--local-dir` selects another private directory.
+
+The former link-based installation remains available explicitly for a machine
+where this repository owns the configuration:
+
+```sh
+./install.sh --mode link --dry-run
+./install.sh --mode link
+```
+
+This mode replaces selected entrypoints with shared links after backing them
+up. Git uses an include wrapper so private identity configuration still loads.
+Neovim uses the standard `nvim` configuration in link mode. Prefer modular mode
+on a work machine or when another setup already manages these applications.
 
 ## Private configuration
 
@@ -50,11 +102,11 @@ these files. Restrict private files with `chmod 600`.
 
 | Private location | Example | Loading behavior |
 | --- | --- | --- |
-| `~/.gitconfig.local` | `examples/gitconfig.local.example` | Git native include: identity, signing, transport, pager, LFS, conditional includes |
+| `~/.gitconfig.local` | `examples/gitconfig.local.example` | Clean/previously owned Git entrypoints include this file; existing unrelated Git setups keep their own identity includes |
 | `$DOTFILES_LOCAL_DIR/env.zsh` | `examples/env.zsh.example` | Before shell paths, plugins, completion, and tool initialization |
-| `~/.zshrc-local` | `examples/zshrc-local.example` | After shared functions/aliases; `DOTFILES_ZSH_LOCAL` selects another file |
-| `~/.vimrc.local` | `examples/vimrc.local.example` | Early `g:dotfiles_*` variables, then final `DotfilesVimLocal()` callback; `DOTFILES_VIM_LOCAL` selects another file |
-| `~/.tmux.conf.local` | `examples/tmux.conf.local.example` | After shared settings; `DOTFILES_TMUX_LOCAL` selects another file |
+| `~/.zshrc-local` | `examples/zshrc-local.example` | After shared functions/aliases in standalone setup; `DOTFILES_ZSH_LOCAL` explicitly selects a file in either mode |
+| `~/.vimrc.local` | `examples/vimrc.local.example` | Early variables and final `DotfilesVimLocal()` callback in standalone setup; `DOTFILES_VIM_LOCAL` explicitly selects a file |
+| `~/.tmux.conf.local` | `examples/tmux.conf.local.example` | After shared settings in standalone setup; `DOTFILES_TMUX_LOCAL` explicitly selects a file |
 | `$DOTFILES_LOCAL_DIR/nvim.lua` | `examples/nvim.lua.example` | Lua table before options/plugins; `DOTFILES_NVIM_LOCAL` takes precedence |
 | `$DOTFILES_LOCAL_DIR/flipper.json` | `examples/flipper.local.json.example` | Applied only by explicit Flipper rendering |
 
@@ -64,6 +116,12 @@ commits. GitHub noreply addresses identify accounts too. For deliberately
 anonymous publication, choose an appropriate public pseudonym and placeholder
 address such as `public@example.invalid` in the publication repository. Review
 commit metadata before pushing.
+
+When layering into an existing setup, implicit shell/Vim/tmux local files stay
+under that setup's control. Set the corresponding explicit override variable
+to load a particular file through this layer. The existing configuration still
+loads afterward. Reinstallation preserves whether the layer was originally
+standalone or added to another setup, including after you add local settings.
 
 The shell skips unavailable optional plugins. Set `DOTFILES_BREW_PREFIX` in the
 early private file when Homebrew is not yet on PATH. Both legacy asdf scripts
@@ -79,6 +137,23 @@ font, shell, terminal, clipboard, backup locations, and tool paths. Existing
 tmux servers need their configuration reloaded to apply changes.
 
 ## Neovim
+
+Modular installation gives this configuration its own command:
+
+```sh
+./install.sh --components nvim
+~/.local/bin/dotfiles-nvim
+```
+
+The launcher selects `NVIM_APPNAME=dotfiles-nvim`, with separate configuration,
+plugin data, state, and cache. It leaves ordinary `nvim` and its files untouched.
+`--nvim-profile` selects another profile/launcher name; `nvim` is reserved for
+the existing setup. Unrelated files at the selected profile are rejected.
+The profile's lockfile is seeded as a local copy, so routine plugin updates do
+not write into this Git checkout. Review and copy intentional pin changes back
+to the repository before publishing. Private Lua settings remain shared through
+`DOTFILES_LOCAL_DIR`; explicit private paths may deliberately share resources.
+Launch a GUI through the same wrapper or supply the same profile and config root.
 
 Requires Neovim 0.11.3–0.11.x; the pinned suite is tested on 0.11.6. Compatible
 Treesitter master and Go 0.11 release pins are used. Keep editor/plugin API
@@ -118,7 +193,7 @@ Rebuild native extensions/parsers per platform; do not copy binaries between OSe
 | htop | Local writable config, seeded once. `HTOPRC` selects another file. htop can rewrite its config. |
 | Flipper | Local writable JSON. Explicit rendering recursively merges template, existing settings, then private overrides. JSON does not expand shell variables. |
 | Ack | `ACKRC` selects a different user config instead of appending an overlay. Use a private complete config or project `.ackrc`. No general shell expansion. |
-| Neovim lockfile | Public dependency revisions. Compatibility requires tested pins and per-platform builds, not environment substitution. |
+| Neovim lockfile | Public pins seed a private profile lockfile in modular mode. Compatibility requires tested revisions and per-platform builds. |
 
 Deliberately apply Flipper overrides with:
 
@@ -177,8 +252,8 @@ private; it is also rejected if force-added to Git.
 Install optional Git hooks explicitly, with backups of replaced hooks:
 
 ```sh
-./install.sh --install-hooks --dry-run
-./install.sh --install-hooks
+./install.sh --components none --install-hooks --dry-run
+./install.sh --components none --install-hooks
 ```
 
 Custom `core.hooksPath` requires explicit integration with existing hooks.
@@ -198,8 +273,8 @@ visibility based only on a current-file scan.
 On a trusted machine, explicitly opt this clone into pushing commits you create:
 
 ```sh
-./install.sh --enable-auto-sync --dry-run
-./install.sh --enable-auto-sync
+./install.sh --components none --enable-auto-sync --dry-run
+./install.sh --components none --enable-auto-sync
 ```
 
 This installs the privacy pre-commit/pre-push hooks and a post-commit hook,
@@ -221,8 +296,8 @@ and Gitleaks must be installed and available.
 Turn automatic pushes off for this clone with:
 
 ```sh
-./install.sh --disable-auto-sync --dry-run
-./install.sh --disable-auto-sync
+./install.sh --components none --disable-auto-sync --dry-run
+./install.sh --components none --disable-auto-sync
 ```
 
 Disabling sets clone-local `dotfiles.autoSync=false` and preserves existing hooks,

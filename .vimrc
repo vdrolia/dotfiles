@@ -1,5 +1,14 @@
+" A local vimrc can include this layer without duplicating its autocmds.
+if exists('g:dotfiles_vim_loaded')
+  finish
+endif
+let g:dotfiles_vim_loaded = 1
+
 " Private settings load before plugin and tool configuration.
-let s:local_config = empty($DOTFILES_VIM_LOCAL) ? expand('~/.vimrc.local') : expand($DOTFILES_VIM_LOCAL)
+" An existing vimrc owns its implicit overlay; explicit selections still apply.
+let s:coexist = get(g:, 'dotfiles_coexist', 0)
+let s:local_config = !empty($DOTFILES_VIM_LOCAL) ? expand($DOTFILES_VIM_LOCAL) :
+      \ (s:coexist ? '' : expand('~/.vimrc.local'))
 if filereadable(s:local_config)
   execute 'source ' . fnameescape(s:local_config)
 endif
@@ -13,8 +22,9 @@ endif
 " Keep its language packs; private settings may explicitly select another list.
 let g:polyglot_disabled = get(g:, 'polyglot_disabled', ['ftdetect'])
 
-" Add plugins
-if get(g:, 'dotfiles_enable_plugins', 1) &&
+" An existing vimrc owns plugin initialization unless explicitly enabled here.
+let s:enable_plugins = get(g:, 'dotfiles_enable_plugins', !s:coexist)
+if s:enable_plugins &&
       \ (exists('*plug#begin') || !empty(globpath(&runtimepath, 'autoload/plug.vim')))
 call plug#begin(get(g:, 'dotfiles_plugins_dir', expand('~/.vim/plugged')))
 Plug 'Valloric/YouCompleteMe'
@@ -42,7 +52,7 @@ Plug 'joshdick/onedark.vim'
 call plug#end()
 endif
 
-if exists('*glaive#Install') || !empty(globpath(&runtimepath, 'autoload/glaive.vim'))
+if s:enable_plugins && (exists('*glaive#Install') || !empty(globpath(&runtimepath, 'autoload/glaive.vim')))
   call glaive#Install()
 endif
 

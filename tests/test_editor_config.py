@@ -13,6 +13,100 @@ REPO = Path(__file__).resolve().parents[1]
 
 class EditorConfigTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("vim"), "Vim is unavailable")
+    def test_existing_vimrc_owns_its_implicit_private_overlay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            conventional = temp / "conventional.vim"
+            conventional.write_text("let g:overlay_loads = get(g:, 'overlay_loads', 0) + 1\n")
+            shared = temp / "shared.vim"
+            # Redirect only the conventional filename in a fixture; never
+            # create home files or override HOME for an editor subprocess.
+            shared.write_text((REPO / ".vimrc").read_text().replace("'~/.vimrc.local'", repr(str(conventional))))
+            wrapper = temp / "existing.vim"
+            wrapper.write_text(
+                "let g:dotfiles_coexist = 1\nlet g:dotfiles_enable_plugins = 0\nlet g:dotfiles_fzf_path = ''\n"
+                "execute 'source ' . fnameescape(" + repr(str(shared)) + ")\n"
+                "let g:shared_overlay_loads = get(g:, 'overlay_loads', 0)\n"
+                "execute 'source ' . fnameescape(" + repr(str(conventional)) + ")\n"
+            )
+            output = temp / "result.json"
+            script = temp / "verify.vim"
+            script.write_text(
+                "call writefile([json_encode({'shared': g:shared_overlay_loads, 'final': g:overlay_loads})], "
+                + repr(str(output)) + ")\nqa!\n"
+            )
+            env = dict(os.environ, XDG_CACHE_HOME=str(temp / "cache"))
+            env.pop("DOTFILES_VIM_LOCAL", None)
+            result = subprocess.run([shutil.which("vim"), "-N", "-n", "-i", "NONE", "-es",
+                                     "--cmd", "set runtimepath=$VIMRUNTIME",
+                                     "-u", str(wrapper), "-S", str(script)],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(output.read_text()), {"shared": 0, "final": 1})
+
+    @unittest.skipUnless(shutil.which("vim"), "Vim is unavailable")
+    def test_existing_vimrc_owns_plugins_and_overrides_with_once_only_shared_source(self):
+        for explicit in [False, True]:
+            with self.subTest(explicit_plugins=explicit), tempfile.TemporaryDirectory() as directory:
+                temp = Path(directory)
+                checkout = temp / "another checkout"
+                checkout.mkdir()
+                shared = checkout / ".vimrc"
+                shutil.copyfile(REPO / ".vimrc", shared)
+                runtime = temp / "runtime"
+                (runtime / "autoload").mkdir(parents=True)
+                (runtime / "autoload/plug.vim").write_text(
+                    "function! plug#begin(...)\n"
+                    " let g:plugin_bootstraps = get(g:, 'plugin_bootstraps', 0) + 1\n"
+                    " command! -nargs=+ Plug let g:plugin_declared = 1\n"
+                    "endfunction\nfunction! plug#end()\nendfunction\n"
+                )
+                (runtime / "autoload/glaive.vim").write_text(
+                    "function! glaive#Install()\n"
+                    " let g:glaive_bootstraps = get(g:, 'glaive_bootstraps', 0) + 1\nendfunction\n"
+                )
+                local = temp / "private.vim"
+                local.write_text(
+                    "let g:dotfiles_fzf_path = ''\n"
+                    "let g:dotfiles_backupdir = " + repr(str(temp / "backup")) + "\n"
+                    "let g:dotfiles_swapdir = " + repr(str(temp / "swap")) + "\n"
+                    + ("let g:dotfiles_enable_plugins = 1\n" if explicit else "")
+                )
+                wrapper = temp / "existing.vim"
+                wrapper.write_text(
+                    "let g:dotfiles_coexist = 1\n"
+                    "execute 'source ' . fnameescape(" + repr(str(shared)) + ")\n"
+                    "unlet g:dotfiles_coexist\n"
+                    "let g:shared_bootstraps = get(g:, 'plugin_bootstraps', 0)\n"
+                    "call plug#begin()\ncall plug#end()\n"
+                    "set numberwidth=9\nlet mapleader = ';'\n"
+                    "nnoremap <F3> :echo 'existing mapping'<CR>\n"
+                )
+                output = temp / "result.json"
+                script = temp / "verify.vim"
+                script.write_text(
+                    "execute 'source ' . fnameescape(" + repr(str(shared)) + ")\n"
+                    "call writefile([json_encode({'shared': g:shared_bootstraps, "
+                    "'plugins': g:plugin_bootstraps, 'glaive': get(g:, 'glaive_bootstraps', 0), "
+                    "'numberwidth': &numberwidth, 'leader': mapleader, 'mapping': maparg('<F3>', 'n'), "
+                    "'autocmds': execute('autocmd FileType yaml')})], " + repr(str(output)) + ")\nqa!\n"
+                )
+                result = subprocess.run([shutil.which("vim"), "-N", "-n", "-i", "NONE", "-es",
+                                         "--cmd", "set runtimepath=" + str(runtime) + ",$VIMRUNTIME",
+                                         "-u", str(wrapper), "-S", str(script)],
+                                        env=dict(os.environ, DOTFILES_VIM_LOCAL=str(local)),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                state = json.loads(output.read_text())
+                self.assertEqual(state["shared"], int(explicit))
+                self.assertEqual(state["plugins"], int(explicit) + 1)
+                self.assertEqual(state["glaive"], int(explicit))
+                self.assertEqual(state["numberwidth"], 9)
+                self.assertEqual(state["leader"], ";")
+                self.assertIn("existing mapping", state["mapping"])
+                self.assertEqual(state["autocmds"].count("setlocal ts=2 sts=2 sw=2 expandtab"), 1)
+
+    @unittest.skipUnless(shutil.which("vim"), "Vim is unavailable")
     def test_backup_and_swap_paths_with_spaces_and_commas(self):
         for leaf in ["with spaces", "with,commas", "with spaces,and commas"]:
             with self.subTest(leaf=leaf), tempfile.TemporaryDirectory() as directory:
@@ -162,6 +256,53 @@ class EditorConfigTests(unittest.TestCase):
             self.assertEqual(state["numberwidth"], 7)
             self.assertIn(str(temp), state["backup"])
             self.assertTrue((temp / "backup").is_dir())
+
+    @unittest.skipUnless(shutil.which("tmux"), "tmux is unavailable")
+    def test_existing_tmux_settings_win_and_implicit_overlay_is_not_loaded(self):
+        for explicit in [False, True]:
+            with self.subTest(explicit_overlay=explicit), tempfile.TemporaryDirectory() as directory:
+                temp = Path(directory)
+                checkout = temp / "another checkout"
+                checkout.mkdir()
+                conventional = temp / "conventional.conf"
+                conventional.write_text("set -g @private_overlay_loaded 1\n")
+                shared = checkout / ".tmux.conf"
+                shared.write_text((REPO / ".tmux.conf").read_text().replace("~/.tmux.conf.local", str(conventional)))
+                wrapper = temp / "existing.conf"
+                wrapper.write_text(
+                    "set -g @dotfiles_coexist 1\n"
+                    'source-file "' + str(shared) + '"\n'
+                    "set -gu @dotfiles_coexist\nset -g history-limit 7654\nset -g prefix C-a\n"
+                    'bind-key -T copy-mode-vi y display-message "existing-binding"\n'
+                )
+                fake_bin = temp / "bin"
+                fake_bin.mkdir()
+                (fake_bin / "uname").write_text("#!/bin/sh\nprintf '%s\\n' Linux\n")
+                (fake_bin / "uname").chmod(0o700)
+                socket = "dotfiles-test-" + uuid.uuid4().hex
+                tmux = shutil.which("tmux")
+                env = dict(os.environ, DISPLAY="", WAYLAND_DISPLAY="",
+                           PATH=str(fake_bin) + os.pathsep + os.environ.get("PATH", os.defpath))
+                env.pop("TMUX", None)
+                env.pop("DOTFILES_TMUX_LOCAL", None)
+                if explicit:
+                    env["DOTFILES_TMUX_LOCAL"] = str(conventional)
+                try:
+                    result = subprocess.run([tmux, "-L", socket, "-f", str(wrapper),
+                                             "new-session", "-d", "-s", "check", "/bin/sleep 30"],
+                                            env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    history = subprocess.check_output([tmux, "-L", socket, "show-option", "-gv", "history-limit"], env=env)
+                    prefix = subprocess.check_output([tmux, "-L", socket, "show-option", "-gv", "prefix"], env=env)
+                    self.assertEqual(history.decode().strip(), "7654")
+                    self.assertEqual(prefix.decode().strip(), "C-a")
+                    binding = subprocess.check_output([tmux, "-L", socket, "list-keys", "-T", "copy-mode-vi", "y"], env=env).decode()
+                    self.assertIn("existing-binding", binding)
+                    overlay = subprocess.run([tmux, "-L", socket, "show-option", "-gv", "@private_overlay_loaded"],
+                                             env=env, capture_output=True, text=True)
+                    self.assertEqual(overlay.returncode == 0, explicit)
+                finally:
+                    subprocess.run([tmux, "-L", socket, "kill-server"], env=env, capture_output=True)
 
     @unittest.skipUnless(shutil.which("tmux"), "tmux is unavailable")
     def test_tmux_headless_copy_and_private_override(self):

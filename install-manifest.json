@@ -1,182 +1,217 @@
 {
-  "version": 1,
+  "version": 2,
   "links": [
     {
       "source": ".ackrc",
       "root": "home",
-      "target": ".ackrc"
+      "target": ".ackrc",
+      "component": "ack"
     },
     {
       "source": ".gitconfig",
       "root": "home",
-      "target": ".gitconfig"
+      "target": ".gitconfig",
+      "component": "git"
     },
     {
       "source": ".tmux.conf",
       "root": "home",
-      "target": ".tmux.conf"
+      "target": ".tmux.conf",
+      "component": "tmux"
     },
     {
       "source": ".vimrc",
       "root": "home",
-      "target": ".vimrc"
+      "target": ".vimrc",
+      "component": "vim"
     },
     {
       "source": ".zshrc",
       "root": "home",
-      "target": ".zshrc"
+      "target": ".zshrc",
+      "component": "zsh"
     },
     {
       "source": ".zshrc-functions",
       "root": "home",
-      "target": ".zshrc-functions"
+      "target": ".zshrc-functions",
+      "component": "zsh"
     },
     {
       "source": ".config/nvim/init.lua",
       "root": "config",
-      "target": "nvim/init.lua"
+      "target": "nvim/init.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lazy-lock.json",
       "root": "config",
-      "target": "nvim/lazy-lock.json"
+      "target": "nvim/lazy-lock.json",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/autocmds.lua",
       "root": "config",
-      "target": "nvim/lua/config/autocmds.lua"
+      "target": "nvim/lua/config/autocmds.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/git_picker.lua",
       "root": "config",
-      "target": "nvim/lua/config/git_picker.lua"
+      "target": "nvim/lua/config/git_picker.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/keymaps.lua",
       "root": "config",
-      "target": "nvim/lua/config/keymaps.lua"
+      "target": "nvim/lua/config/keymaps.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/lazy.lua",
       "root": "config",
-      "target": "nvim/lua/config/lazy.lua"
+      "target": "nvim/lua/config/lazy.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/machine.lua",
       "root": "config",
-      "target": "nvim/lua/config/machine.lua"
+      "target": "nvim/lua/config/machine.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/options.lua",
       "root": "config",
-      "target": "nvim/lua/config/options.lua"
+      "target": "nvim/lua/config/options.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/parsers.lua",
       "root": "config",
-      "target": "nvim/lua/config/parsers.lua"
+      "target": "nvim/lua/config/parsers.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/config/python.lua",
       "root": "config",
-      "target": "nvim/lua/config/python.lua"
+      "target": "nvim/lua/config/python.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/colorscheme.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/colorscheme.lua"
+      "target": "nvim/lua/plugins/colorscheme.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/direnv.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/direnv.lua"
+      "target": "nvim/lua/plugins/direnv.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/editor.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/editor.lua"
+      "target": "nvim/lua/plugins/editor.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/file-explorer.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/file-explorer.lua"
+      "target": "nvim/lua/plugins/file-explorer.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/formatting.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/formatting.lua"
+      "target": "nvim/lua/plugins/formatting.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/git.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/git.lua"
+      "target": "nvim/lua/plugins/git.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/lang/go.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/lang/go.lua"
+      "target": "nvim/lua/plugins/lang/go.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/lang/python.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/lang/python.lua"
+      "target": "nvim/lua/plugins/lang/python.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/lang/typescript.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/lang/typescript.lua"
+      "target": "nvim/lua/plugins/lang/typescript.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/lsp.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/lsp.lua"
+      "target": "nvim/lua/plugins/lsp.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/render-markdown.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/render-markdown.lua"
+      "target": "nvim/lua/plugins/render-markdown.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/telescope.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/telescope.lua"
+      "target": "nvim/lua/plugins/telescope.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/treesitter.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/treesitter.lua"
+      "target": "nvim/lua/plugins/treesitter.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/trouble.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/trouble.lua"
+      "target": "nvim/lua/plugins/trouble.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/ui.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/ui.lua"
+      "target": "nvim/lua/plugins/ui.lua",
+      "component": "nvim"
     },
     {
       "source": ".config/nvim/lua/plugins/which-key.lua",
       "root": "config",
-      "target": "nvim/lua/plugins/which-key.lua"
+      "target": "nvim/lua/plugins/which-key.lua",
+      "component": "nvim"
     }
   ],
   "seeds": [
     {
       "source": "templates/tool-versions",
       "root": "home",
-      "target": ".tool-versions"
+      "target": ".tool-versions",
+      "component": "tools"
     },
     {
       "source": "templates/htop/htoprc",
       "root": "config",
-      "target": "htop/htoprc"
+      "target": "htop/htoprc",
+      "component": "htop"
     },
     {
       "source": "templates/flipper/settings.json",
       "root": "config",
-      "target": "flipper/settings.json"
+      "target": "flipper/settings.json",
+      "component": "flipper"
     }
   ]
 }

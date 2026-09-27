@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,11 +31,11 @@ class InstallerTests(unittest.TestCase):
             "jsApps": {"webAppLauncher": {"width": 800, "height": 600}},
         }))
         self.manifest = {
-            "version": 1,
-            "links": [{"source": ".example", "root": "home", "target": ".example"}],
+            "version": 2,
+            "links": [{"source": ".example", "root": "home", "target": ".example", "component": "ack"}],
             "seeds": [
-                {"source": "templates/tool-versions", "root": "home", "target": ".tool-versions"},
-                {"source": "templates/flipper/settings.json", "root": "config", "target": "flipper/settings.json"},
+                {"source": "templates/tool-versions", "root": "home", "target": ".tool-versions", "component": "tools"},
+                {"source": "templates/flipper/settings.json", "root": "config", "target": "flipper/settings.json", "component": "flipper"},
             ],
         }
         self.write_manifest()
@@ -50,7 +51,7 @@ class InstallerTests(unittest.TestCase):
     def run_install(self, *args, success=True):
         result = subprocess.run([
             sys.executable, str(self.repo / "scripts/install.py"),
-            "--target-dir", str(self.target), *args,
+            "--target-dir", str(self.target), "--mode", "link", *args,
         ], capture_output=True, text=True, env=self.env, timeout=20)
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
         return result
@@ -146,7 +147,7 @@ class InstallerTests(unittest.TestCase):
         source = self.repo / "shared/config"
         source.parent.mkdir()
         source.write_text("original shared contents\n")
-        self.manifest["links"].append({"source": "shared/config", "root": "home", "target": "shared/config"})
+        self.manifest["links"].append({"source": "shared/config", "root": "home", "target": "shared/config", "component": "ack"})
         self.write_manifest()
         self.target.mkdir()
         (self.target / "shared").symlink_to(source.parent, target_is_directory=True)
@@ -210,6 +211,9 @@ class InstallerTests(unittest.TestCase):
                                      local_dir=None, render_flipper=False,
                                      flipper_overrides=None, install_hooks=False,
                                      enable_auto_sync=False, disable_auto_sync=False,
+                                     mode="link", components="all", zsh_dir=None,
+                                     git_config=None, vim_config=None, tmux_config=None,
+                                     nvim_profile="dotfiles-nvim",
                                      dry_run=True))()
 
     def test_relative_xdg_directories_are_rejected_when_used(self):
@@ -373,6 +377,325 @@ class InstallerTests(unittest.TestCase):
         after = {p.name: p.read_bytes() for p in hooks.iterdir() if p.is_file()}
         self.assertEqual(before, after)
         self.assertFalse(self.target.exists())
+
+
+class ModularInstallerTests(unittest.TestCase):
+    write_manifest = InstallerTests.write_manifest
+
+    def setUp(self):
+        InstallerTests.setUp(self)
+        quoted_checkout = self.base / ("modules ' \" $ literal [*?] " + "\\" + " backslash")
+        self.repo.rename(quoted_checkout)
+        self.repo = quoted_checkout
+        sources = {
+            ".zshrc": 'typeset -g DOTFILES_TEST_ORDER="${DOTFILES_TEST_ORDER:-}shared"\n'
+                      'typeset -g DOTFILES_TEST_FRAMEWORKS="${DOTFILES_ZSH_FRAMEWORKS-unset}"\n',
+            ".zshrc-functions": "# Shared helper fixture\n",
+            ".gitconfig": "[demo]\n  value = shared\n",
+            ".vimrc": "let g:shared_coexist = get(g:, 'dotfiles_coexist', 0)\nset tabstop=2\n",
+            ".tmux.conf": 'set -gF @shared_coexist "#{@dotfiles_coexist}"\nset -g status-left shared\n',
+            ".ackrc": "--smart-case\n",
+            ".config/nvim/init.lua": "-- profile fixture\n",
+            ".config/nvim/lazy-lock.json": "{}\n",
+            ".config/nvim/lua/config/example.lua": "return {}\n",
+        }
+        components = {".zshrc": "zsh", ".zshrc-functions": "zsh", ".gitconfig": "git",
+                      ".vimrc": "vim", ".tmux.conf": "tmux", ".ackrc": "ack"}
+        self.manifest["links"] = []
+        for name, data in sources.items():
+            source = self.repo / name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(data)
+            nvim = name.startswith(".config/")
+            self.manifest["links"].append({"source": name, "root": "config" if nvim else "home",
+                                            "target": name.removeprefix(".config/") if nvim else name,
+                                            "component": "nvim" if nvim else components[name]})
+        self.write_manifest()
+
+    def run_install(self, *args, success=True):
+        result = subprocess.run([sys.executable, str(self.repo / "scripts/install.py"),
+                                 "--target-dir", str(self.target), *args],
+                                capture_output=True, text=True, env=self.env, timeout=20)
+        self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+        return result
+
+    def run_zsh(self, destination):
+        return subprocess.run([shutil.which("zsh"), "-dfc", "source " + shlex.quote(str(destination)) +
+                               '\nprint -r -- "$DOTFILES_TEST_ORDER:$DOTFILES_TEST_FRAMEWORKS:${DOTFILES_ZSH_FRAMEWORKS-unset}"'],
+                              env=self.env, capture_output=True, text=True, timeout=10)
+
+    def git_value(self, path, key):
+        return subprocess.check_output(["git", "config", "--file", str(path), "--includes", "--get", key],
+                                       env=self.env, text=True).strip()
+
+    def test_default_composes_preserves_existing_bytes_and_is_idempotent(self):
+        self.target.mkdir()
+        originals = {".zshrc": b'DOTFILES_TEST_ORDER="${DOTFILES_TEST_ORDER}:existing"\n',
+                     ".gitconfig": b"[demo]\n  value = existing\n",
+                     ".vimrc": b"set tabstop=7\n", ".tmux.conf": b"set -g status-left existing\n"}
+        for name, data in originals.items():
+            (self.target / name).write_bytes(data)
+        self.run_install("--components", "zsh,git,vim,tmux")
+        for name, data in originals.items():
+            self.assertFalse((self.target / name).is_symlink())
+            self.assertTrue((self.target / name).read_bytes().endswith(data))
+        self.assertFalse((self.target / ".zshrc-functions").exists())
+        self.assertEqual(self.git_value(self.target / ".gitconfig", "demo.value"), "existing")
+        before = {name: ((self.target / name).read_bytes(), (self.target / name).stat().st_ino)
+                  for name in originals}
+        self.run_install("--components", "zsh,git,vim,tmux")
+        self.assertEqual(before, {name: ((self.target / name).read_bytes(), (self.target / name).stat().st_ino)
+                                 for name in originals})
+        backups = list((self.target / ".local/state/dotfiles/backups").iterdir())
+        self.assertEqual(len(backups), 1)
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is required")
+    def test_foreign_shell_symlink_sources_original_without_modifying_it(self):
+        foreign = self.base / "other dotfiles"
+        foreign.mkdir()
+        original = foreign / "shell config"
+        original.write_text('DOTFILES_TEST_ORDER="${DOTFILES_TEST_ORDER}:foreign"\n')
+        subprocess.run(["git", "init", "-q", str(foreign)], env=self.env, check=True)
+        self.target.mkdir()
+        destination = self.target / ".zshrc"
+        destination.symlink_to(original)
+        before = (original.read_bytes(), original.stat().st_ino)
+        self.run_install("--components", "zsh")
+        self.assertFalse(destination.is_symlink())
+        self.assertEqual(before, (original.read_bytes(), original.stat().st_ino))
+        result = self.run_zsh(destination)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "shared:foreign:0:unset\n")
+        original.write_text('DOTFILES_TEST_ORDER="${DOTFILES_TEST_ORDER}:updated"\n')
+        self.assertEqual(self.run_zsh(destination).stdout, "shared:updated:0:unset\n")
+
+    def test_foreign_parent_directory_symlink_fails_before_any_changes(self):
+        foreign = self.base / "other dotfiles"
+        foreign.mkdir()
+        subprocess.run(["git", "init", "-q", str(foreign)], env=self.env, check=True)
+        self.target.mkdir()
+        (self.target / ".config").symlink_to(foreign)
+        self.run_install("--components", "zsh,nvim", success=False)
+        self.assertFalse((self.target / ".zshrc").exists())
+        self.assertFalse((foreign / "dotfiles-nvim").exists())
+
+    def test_backups_cannot_copy_private_contents_into_a_foreign_checkout(self):
+        foreign = self.base / "other dotfiles"
+        foreign.mkdir()
+        subprocess.run(["git", "init", "-q", str(foreign)], env=self.env, check=True)
+        state = self.target / ".local/state"
+        state.mkdir(parents=True)
+        (state / "dotfiles").symlink_to(foreign)
+        existing = self.target / ".zshrc"
+        existing.write_text("# private original settings\n")
+        self.run_install("--components", "zsh", success=False)
+        self.assertEqual(existing.read_text(), "# private original settings\n")
+        self.assertFalse((foreign / "backups").exists())
+
+    def test_owned_symlinks_become_standalone_loaders_and_keep_private_identity(self):
+        self.target.mkdir()
+        for name in (".zshrc", ".gitconfig", ".vimrc", ".tmux.conf"):
+            (self.target / name).symlink_to(self.repo / name)
+        local = self.target / ".gitconfig.local"
+        local.write_text("[user]\n  name = Local Contributor\n")
+        self.run_install("--components", "zsh,git,vim,tmux")
+        for name in (".zshrc", ".gitconfig", ".vimrc", ".tmux.conf"):
+            path = self.target / name
+            self.assertFalse(path.is_symlink())
+            self.assertIn("load mode: standalone", path.read_text())
+            with path.open("a") as stream:
+                stream.write(('"' if name == ".vimrc" else "#") + " local customization\n")
+        self.run_install("--components", "zsh,git,vim,tmux")
+        for name in (".zshrc", ".gitconfig", ".vimrc", ".tmux.conf"):
+            self.assertIn("load mode: standalone", (self.target / name).read_text())
+        self.assertEqual(self.git_value(self.target / ".gitconfig", "user.name"), "Local Contributor")
+
+    def test_native_xdg_git_and_tmux_are_used_without_home_shadow_files(self):
+        config = self.base / "config root"
+        for name in ("git/config", "tmux/tmux.conf"):
+            path = config / name
+            path.parent.mkdir(parents=True)
+            path.write_text("# existing\n")
+        self.run_install("--components", "git,tmux", "--config-dir", str(config))
+        self.assertFalse((self.target / ".gitconfig").exists())
+        self.assertFalse((self.target / ".tmux.conf").exists())
+        self.assertIn("dotfiles managed git", (config / "git/config").read_text())
+        self.assertIn("dotfiles managed tmux", (config / "tmux/tmux.conf").read_text())
+
+    def test_existing_xdg_git_is_modified_before_later_home_global(self):
+        config = self.target / ".config/git/config"
+        config.parent.mkdir(parents=True)
+        config.write_text("[demo]\n value = xdg\n")
+        home = self.target / ".gitconfig"
+        home.write_text("[demo]\n value = home\n")
+        self.run_install("--components", "git")
+        self.assertEqual(home.read_text(), "[demo]\n value = home\n")
+        self.assertEqual(self.git_value(config, "demo.value"), "xdg")
+
+    def test_real_home_discovery_honors_zdotdir_and_explicit_git_environment(self):
+        installer = runpy.run_path(str(self.repo / "scripts/install.py"))["Installer"]
+        args = InstallerTests.installer_args(self)
+        args.mode = "modular"
+        args.components = "zsh,git"
+        zsh = self.base / "zsh startup"
+        git_config = self.base / "global git config"
+        with mock.patch.dict(os.environ, {"ZDOTDIR": str(zsh), "GIT_CONFIG_GLOBAL": str(git_config),
+                                          "XDG_CONFIG_HOME": str(self.base / "config"),
+                                          "XDG_STATE_HOME": str(self.base / "state")}), \
+                mock.patch.object(Path, "home", return_value=self.target):
+            installation = installer(args)
+        self.assertEqual(installation.entrypoints["zsh"], zsh / ".zshrc")
+        self.assertEqual(installation.entrypoints["git"], git_config)
+        self.assertFalse(self.target.exists())
+
+    def test_nonlayerable_existing_symlinks_and_contents_stay_unchanged(self):
+        self.target.mkdir()
+        own = self.target / ".ackrc"
+        own.symlink_to(self.repo / ".ackrc")
+        original = self.base / "tool versions"
+        original.write_text("python system\n")
+        tools = self.target / ".tool-versions"
+        tools.symlink_to(original)
+        before = (own.lstat().st_ino, tools.lstat().st_ino, original.read_bytes())
+        self.run_install("--components", "ack,tools")
+        self.assertEqual(before, (own.lstat().st_ino, tools.lstat().st_ino, original.read_bytes()))
+        self.assertTrue(own.is_symlink())
+        self.assertTrue(tools.is_symlink())
+
+    def test_component_selection_dry_run_and_invalid_selection(self):
+        self.run_install("--components", "zsh", "--dry-run")
+        self.assertFalse(self.target.exists())
+        self.run_install("--components", "not-a-component", success=False)
+        self.assertFalse(self.target.exists())
+        self.run_install("--components", "none")
+        self.assertFalse(self.target.exists())
+        self.run_install("--components", "zsh")
+        self.assertTrue((self.target / ".zshrc").is_file())
+        self.assertFalse((self.target / ".gitconfig").exists())
+        self.assertFalse((self.target / ".config").exists())
+
+    def test_bom_or_binary_config_requires_manual_integration_before_writes(self):
+        self.target.mkdir()
+        path = self.target / ".gitconfig"
+        for data in (b"\xef\xbb\xbf[demo]\n value = existing\n", b"binary\0contents"):
+            with self.subTest(data=data):
+                path.write_bytes(data)
+                result = self.run_install("--components", "zsh,git", success=False)
+                self.assertIn("native include manually", result.stderr)
+                self.assertEqual(path.read_bytes(), data)
+                self.assertFalse((self.target / ".zshrc").exists())
+
+    def test_explicit_link_mode_keeps_git_as_native_wrapper(self):
+        self.run_install("--mode", "link", "--components", "zsh,git")
+        self.assertTrue((self.target / ".zshrc").is_symlink())
+        self.assertTrue((self.target / ".zshrc-functions").is_symlink())
+        self.assertFalse((self.target / ".gitconfig").is_symlink())
+        self.assertIn(".gitconfig.local", (self.target / ".gitconfig").read_text())
+
+    def test_profile_and_launcher_are_separate_and_lock_is_mutable_local_copy(self):
+        existing = self.target / ".config/nvim/init.lua"
+        existing.parent.mkdir(parents=True)
+        existing.write_text("-- existing unrelated setup\n")
+        self.run_install("--components", "nvim", "--nvim-profile", "custom-nvim")
+        profile = self.target / ".config/custom-nvim"
+        self.assertTrue((profile / "init.lua").is_symlink())
+        lock = profile / "lazy-lock.json"
+        self.assertFalse(lock.is_symlink())
+        lock.write_text('{"private-plugin": {}}\n')
+        self.run_install("--components", "nvim", "--nvim-profile", "custom-nvim")
+        self.assertEqual(lock.read_text(), '{"private-plugin": {}}\n')
+        self.assertEqual(existing.read_text(), "-- existing unrelated setup\n")
+        self.assertTrue((self.target / ".local/bin/custom-nvim").is_file())
+        self.assertFalse((self.target / ".local/bin/dotfiles-nvim").exists())
+
+    def test_profile_conflicts_and_unsafe_names_fail_before_any_writes(self):
+        profile = self.target / ".config/dotfiles-nvim"
+        profile.mkdir(parents=True)
+        (profile / "init.lua").write_text("-- unrelated\n")
+        self.run_install("--components", "zsh,nvim", success=False)
+        self.assertFalse((self.target / ".zshrc").exists())
+        for name in ("nvim", "../outside", "contains space"):
+            self.run_install("--components", "zsh,nvim", "--nvim-profile", name, success=False)
+            self.assertFalse((self.target / ".zshrc").exists())
+
+    def test_owned_profile_retargets_broken_links_after_checkout_move(self):
+        self.run_install("--components", "zsh,nvim")
+        moved = self.base / "moved checkout"
+        self.repo.rename(moved)
+        self.repo = moved
+        profile = self.target / ".config/dotfiles-nvim"
+        self.assertFalse((profile / "init.lua").exists())
+        self.run_install("--components", "zsh,nvim")
+        self.assertEqual((profile / "init.lua").resolve(), (moved / ".config/nvim/init.lua").resolve())
+        self.assertIn(str(moved), (self.target / ".zshrc").read_text())
+        self.assertFalse((profile / "lazy-lock.json").is_symlink())
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is required")
+    def test_checkout_quotes_custom_zsh_directory_and_launcher_arguments(self):
+        renamed = self.base / "checkout with ' quote $ literal"
+        self.repo.rename(renamed)
+        self.repo = renamed
+        zsh_dir = self.base / "zsh config ' quoted"
+        zsh_dir.mkdir()
+        (zsh_dir / ".zshrc").write_text('DOTFILES_TEST_ORDER="${DOTFILES_TEST_ORDER}:existing"\n')
+        config = self.base / "xdg ' quoted"
+        self.run_install("--components", "zsh,nvim", "--zsh-dir", str(zsh_dir), "--config-dir", str(config))
+        self.assertEqual(self.run_zsh(zsh_dir / ".zshrc").stdout, "shared:existing:0:unset\n")
+        self.assertFalse((self.target / ".zshrc").exists())
+        binary = self.base / "bin"
+        binary.mkdir()
+        nvim = binary / "nvim"
+        nvim.write_text('#!/bin/sh\nprintf "%s\\n" "$NVIM_APPNAME" "$XDG_CONFIG_HOME" "$DOTFILES_LOCAL_DIR" "$DOTFILES_NVIM_LOCAL" "$@"\n')
+        nvim.chmod(0o700)
+        env = dict(self.env, PATH=str(binary) + os.pathsep + os.defpath,
+                   DOTFILES_LOCAL_DIR=str(self.base / "explicit local"), DOTFILES_NVIM_LOCAL="explicit-file")
+        launcher = self.target / ".local/bin/dotfiles-nvim"
+        result = subprocess.run([str(launcher), "file with spaces", "literal$argument"], env=env,
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.splitlines(), ["dotfiles-nvim", str(config), env["DOTFILES_LOCAL_DIR"],
+                                                     "explicit-file", "file with spaces", "literal$argument"])
+
+    @unittest.skipUnless(shutil.which("vim"), "Vim is required")
+    def test_native_vim_loader_preserves_existing_settings_and_restores_marker(self):
+        self.target.mkdir()
+        config = self.target / ".vimrc"
+        config.write_text("set tabstop=7\n")
+        self.run_install("--components", "vim")
+        output = self.base / "vim-output"
+        expression = "call writefile([string(&tabstop), string(g:shared_coexist), string(exists('g:dotfiles_coexist'))], " + repr(str(output)) + ")"
+        result = subprocess.run([shutil.which("vim"), "-Nu", str(config), "--noplugin", "-n", "-es", "-i", "NONE",
+                                 "-c", expression, "-c", "qa!"], env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output.read_text().splitlines(), ["7", "1", "0"])
+
+    @unittest.skipUnless(shutil.which("tmux"), "tmux is required")
+    def test_native_tmux_loader_restores_marker_and_existing_settings(self):
+        self.target.mkdir()
+        config = self.target / ".tmux.conf"
+        config.write_text("set -g status-left existing\n")
+        # An unescaped source-file glob could silently select this other tree.
+        decoy = self.base / self.repo.name.replace("[*?]", "*").replace("\\", "")
+        decoy.mkdir()
+        (decoy / ".tmux.conf").write_text("set -g @unexpected_source loaded\n")
+        self.run_install("--components", "tmux")
+        socket = str(self.base / "tmux.sock")
+        tmux = shutil.which("tmux")
+        env = dict(self.env)
+        env.pop("TMUX", None)
+        env.pop("TMUX_PANE", None)
+        command = [tmux, "-S", socket]
+        try:
+            result = subprocess.run([*command, "-f", str(config), "new-session", "-d", "-s", "fixture", "sleep 30"],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            def option(name):
+                return subprocess.check_output([*command, "show-options", "-gqv", name], env=env, text=True).strip()
+            self.assertEqual(option("status-left"), "existing")
+            self.assertEqual(option("@shared_coexist"), "1")
+            self.assertEqual(option("@dotfiles_coexist"), "")
+            self.assertEqual(option("@unexpected_source"), "")
+        finally:
+            subprocess.run([*command, "kill-server"], env=env, capture_output=True)
 
 
 if __name__ == "__main__":
